@@ -283,6 +283,7 @@ def configuration_fingerprints(config: TrainingConfig, source_fingerprint: str) 
     ppe_training = _digest({"preparation": _digest(preparation), "model": config.ppe_model, "epochs": config.ppe_epochs, "imgsz": config.imgsz, "batch": config.ppe_batch, "patience": config.patience})
     return {
         "dataset": source_fingerprint,
+        "split": _digest({"dataset": source_fingerprint, "ratios": preparation["ratios"], "seed": config.seed}),
         "preparation": _digest(preparation),
         "person_training": person_training,
         "ppe_training": ppe_training,
@@ -328,7 +329,9 @@ def _old_stages(payload: dict[str, Any]) -> set[str]:
 
 
 def _artifact_state(project: Path, stages: set[str], payload: dict[str, Any]) -> dict[str, bool]:
-    prepared = all((project / item).is_file() for item in ("data/splits.json", "data/parent_dataset/dataset.yaml", "data/child_dataset/dataset.yaml"))
+    required_files = ("data/splits.json", "data/parent_dataset/dataset.yaml", "data/child_dataset/dataset.yaml")
+    required_dirs = tuple(f"data/{kind}/{content}/{split}" for kind in ("parent_dataset", "child_dataset") for content in ("images", "labels") for split in ("train", "val", "test"))
+    prepared = all((project / item).is_file() and (project / item).stat().st_size > 0 for item in required_files) and all((project / item).is_dir() for item in required_dirs)
     person_path, ppe_path = project / "weights/person_best.pt", project / "weights/ppe_best.pt"
     person = person_path.is_file() and person_path.stat().st_size > 0
     ppe = ppe_path.is_file() and ppe_path.stat().st_size > 0
@@ -413,6 +416,8 @@ def train_two_stage(config: TrainingConfig, *, trainer: TrainingAdapter | None =
         raise ValueError("output must not be the input dataset or one of its subdirectories")
     if restart_from is not None and not resume:
         raise ValueError("restart_from requires resume=True")
+    if resume and project.exists() and any(project.iterdir()) and not (project / "project.json").is_file():
+        raise ValueError(f"Cannot resume a non-empty directory without project.json: {project}")
     if project.exists() and any(project.iterdir()) and not resume:
         raise FileExistsError(f"Output project is not empty: {project}")
     audit = audit_voc_dataset(dataset)

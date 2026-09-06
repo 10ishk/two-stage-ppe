@@ -337,6 +337,15 @@ def test_resume_dry_run_returns_plan_without_writes(tmp_path):
     assert "ppe_trained" in result.resume_plan["run"]
 
 
+def test_resume_refuses_non_project_directory(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "unrelated.txt").write_text("keep")
+    with pytest.raises(ValueError, match="without project.json"):
+        train_two_stage(config(dataset, run), trainer=FakeTrainer(), resume=True)
+
+
 def test_restart_from_ppe_train_reuses_person(tmp_path):
     dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
     run = tmp_path / "run"

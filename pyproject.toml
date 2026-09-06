@@ -23,6 +23,7 @@ dependencies = ["numpy>=1.23", "opencv-python>=4.8"]
 
 [project.optional-dependencies]
 yolo = ["ultralytics>=8.3,<9"]
+tracking = ["ultralytics>=8.3,<9", "lap>=0.5.12"]
 test = ["pytest>=7.4"]
 
 [project.scripts]

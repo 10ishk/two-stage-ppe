@@ -36,14 +36,18 @@ class PersonResult:
     bbox: BBox
     confidence: float
     ppe: list[Detection] = field(default_factory=list)
+    track_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "id": self.id,
             "bbox": _box_list(self.bbox),
             "confidence": round(float(self.confidence), 6),
             "ppe": [detection.to_dict() for detection in self.ppe],
         }
+        if self.track_id is not None:
+            result["track_id"] = self.track_id
+        return result
 
 
 @dataclass
@@ -122,6 +126,8 @@ class VideoSummary:
     total_ppe_detections: int
     elapsed_seconds: float
     interrupted: bool = False
+    unique_tracks: int | None = None
+    max_concurrent_tracks: int | None = None
 
     @property
     def average_processing_fps(self) -> float:
@@ -144,4 +150,6 @@ class VideoSummary:
             "elapsed_seconds": round(self.elapsed_seconds, 6),
             "average_processing_fps": round(self.average_processing_fps, 6),
             "interrupted": self.interrupted,
+            "unique_tracks": self.unique_tracks,
+            "max_concurrent_tracks": self.max_concurrent_tracks,
         }

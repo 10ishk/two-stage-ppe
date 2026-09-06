@@ -27,11 +27,11 @@ def render_result(image: np.ndarray, result: "ImageResult") -> np.ndarray:
     for person in result.persons:
         x1, y1, x2, y2 = (int(round(value)) for value in person.bbox)
         cv2.rectangle(canvas, (x1, y1), (x2, y2), (255, 128, 0), 2)
-        _draw_label(canvas, f"person {person.confidence:.2f}", (x1, y1), (255, 128, 0))
+        person_label = "person" if person.track_id is None else f"person #{person.track_id}"
+        _draw_label(canvas, f"{person_label} {person.confidence:.2f}", (x1, y1), (255, 128, 0))
         for detection in person.ppe:
             a, b, c, d = (int(round(value)) for value in detection.bbox)
             color = (40 + (detection.class_id * 67) % 180, 190, 40 + (detection.class_id * 43) % 180)
             cv2.rectangle(canvas, (a, b), (c, d), color, 2)
             _draw_label(canvas, f"{detection.class_name} {detection.confidence:.2f}", (a, b), color)
     return canvas
-

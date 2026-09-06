@@ -3,6 +3,7 @@
 from .config import PipelineConfig
 from .pipeline import PPEPipeline
 from .results import Detection, FrameResult, ImageResult, PersonResult, VideoSummary
+from .tracking import ByteTrackPersonTracker, PersonTracker, TrackerConfig, TrackedPerson
 
 __all__ = [
     "Detection",
@@ -12,5 +13,9 @@ __all__ = [
     "PersonResult",
     "PipelineConfig",
     "VideoSummary",
+    "ByteTrackPersonTracker",
+    "PersonTracker",
+    "TrackerConfig",
+    "TrackedPerson",
 ]
 __version__ = "0.3.0"

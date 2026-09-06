@@ -15,6 +15,7 @@ from .config import PipelineConfig
 from .detectors import Detector, UltralyticsDetector
 from .geometry import clip_box, crop_to_global, expand_box, valid_box
 from .results import Detection, FrameResult, ImageResult, PersonResult, VideoSummary
+from .tracking import PersonTracker, TrackerConfig, create_person_tracker
 
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -77,7 +78,11 @@ class PPEPipeline:
         return self._predict_frame(frame, source.name, source.resolve())
 
     def _predict_frame(
-        self, frame: np.ndarray, image_name: str, source_path: Path | None = None
+        self,
+        frame: np.ndarray,
+        image_name: str,
+        source_path: Path | None = None,
+        tracker: PersonTracker | None = None,
     ) -> ImageResult:
         """Run the shared image/video-frame detection path."""
         height, width = frame.shape[:2]
@@ -87,7 +92,14 @@ class PPEPipeline:
         people: list[PersonResult] = []
         crop_work: list[tuple[PersonResult, tuple[int, int], np.ndarray]] = []
         matched_parents = [detection for detection in parents if detection.class_id == self.person_class_id]
-        for person_id, detection in enumerate(matched_parents):
+        if tracker is None:
+            tracked_parents = [(index, detection, None) for index, detection in enumerate(matched_parents)]
+        else:
+            tracked_parents = [
+                (item.source_index, item.detection, item.track_id)
+                for item in tracker.update(matched_parents, frame)
+            ]
+        for person_id, detection, track_id in tracked_parents:
             person_box = clip_box(detection.bbox, width, height)
             crop_box = expand_box(person_box, self.config.crop_padding, width, height)
             left, top = math.floor(crop_box[0]), math.floor(crop_box[1])
@@ -96,7 +108,7 @@ class PPEPipeline:
                 LOGGER.warning("Skipping degenerate person crop in %s", image_name)
                 continue
             crop = frame[top:bottom, left:right]
-            person = PersonResult(person_id, person_box, detection.confidence)
+            person = PersonResult(person_id, person_box, detection.confidence, track_id=track_id)
             people.append(person)
             crop_work.append((person, (left, top), crop))
 
@@ -159,6 +171,8 @@ class PPEPipeline:
         render: bool = True,
         frame_callback: Callable[[FrameResult], None] | None = None,
         progress_interval: int = 100,
+        tracking: bool | PersonTracker = False,
+        tracker_config: TrackerConfig | None = None,
     ) -> VideoSummary:
         """Stream a video through the existing batched frame pipeline.
 
@@ -178,6 +192,19 @@ class PPEPipeline:
             raise ValueError("max_frames must be a positive integer or None")
         if progress_interval < 1:
             raise ValueError("progress_interval must be at least 1")
+
+        if tracking is True:
+            try:
+                active_tracker: PersonTracker | None = create_person_tracker(tracker_config)
+            except Exception as exc:
+                raise RuntimeError(
+                    'Tracking was requested but initialization failed. Install '
+                    'pip install "two-stage-ppe[yolo,tracking]" and verify its dependencies.'
+                ) from exc
+        elif tracking is False:
+            active_tracker = None
+        else:
+            active_tracker = tracking
 
         destination = Path(output_path) if output_path is not None else None
         if destination is not None and destination.suffix.lower() not in VIDEO_EXTENSIONS:
@@ -210,6 +237,8 @@ class PPEPipeline:
         actual_height = metadata_height
         saw_frame = False
         interrupted = False
+        observed_track_ids: set[int] = set()
+        max_concurrent_tracks = 0
         started = time.perf_counter()
         try:
             if json_destination is not None:
@@ -231,13 +260,20 @@ class PPEPipeline:
 
                 output_frame = frame
                 if should_process:
-                    image_result = self._predict_frame(frame, f"frame_{frame_index:06d}")
+                    image_result = self._predict_frame(
+                        frame, f"frame_{frame_index:06d}", tracker=active_tracker
+                    )
                     timestamp = frame_index / source_fps if source_fps is not None else None
                     frame_result = FrameResult(
                         frame_index, timestamp, actual_width, actual_height, image_result.persons
                     )
                     total_persons += len(frame_result.persons)
                     total_ppe += sum(len(person.ppe) for person in frame_result.persons)
+                    current_track_ids = {
+                        person.track_id for person in frame_result.persons if person.track_id is not None
+                    }
+                    observed_track_ids.update(current_track_ids)
+                    max_concurrent_tracks = max(max_concurrent_tracks, len(current_track_ids))
                     processed += 1
                     if render:
                         from .visualization import render_result
@@ -298,4 +334,6 @@ class PPEPipeline:
             total_ppe,
             elapsed,
             interrupted,
+            len(observed_track_ids) if active_tracker is not None else None,
+            max_concurrent_tracks if active_tracker is not None else None,
         )

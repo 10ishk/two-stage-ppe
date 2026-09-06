@@ -25,4 +25,4 @@ __all__ = [
     "plan_resume",
     "train_two_stage",
 ]
-__version__ = "0.5.0"
+__version__ = "0.6.0"

@@ -10,6 +10,8 @@ def sample_result():
 
 def test_hierarchy_and_dynamic_class_name():
     payload = sample_result().to_dict()
+    assert list(payload) == ["image", "width", "height", "persons"]
+    assert list(payload["persons"][0]) == ["id", "bbox", "confidence", "ppe"]
     assert payload["persons"][0]["ppe"][0]["class_name"] == "respirator"
     assert payload["persons"][0]["ppe"][0]["bbox"] == [12.0, 15.0, 20.0, 25.0]
 
@@ -29,4 +31,3 @@ def test_save_image_requires_source():
         assert "source image" in str(exc)
     else:
         raise AssertionError("Expected a missing-source error")
-

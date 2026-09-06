@@ -13,10 +13,21 @@ class FakeDetector:
         self.class_names = names
         self.outputs = list(outputs)
         self.calls = 0
+        self.cursor = 0
+        self.batch_sizes = []
 
     def predict(self, image, **kwargs):
-        output = self.outputs[self.calls]
+        output = self.outputs[self.cursor]
+        self.cursor += 1
         self.calls += 1
+        return output
+
+    def predict_batch(self, images, **kwargs):
+        count = len(images)
+        output = self.outputs[self.cursor : self.cursor + count]
+        self.cursor += count
+        self.calls += 1
+        self.batch_sizes.append(count)
         return output
 
 
@@ -31,8 +42,21 @@ def pipeline(parent, child, selector="person"):
 def test_empty_detections(tmp_path):
     image = tmp_path / "a.jpg"
     make_image(image)
-    result = pipeline(FakeDetector({0: "person"}, [[]]), FakeDetector({0: "helmet"}, [])).predict(image)
+    children = FakeDetector({0: "helmet"}, [])
+    result = pipeline(FakeDetector({0: "person"}, [[]]), children).predict(image)
     assert result.persons == []
+    assert children.calls == 0
+
+
+def test_one_person_uses_one_item_batch(tmp_path):
+    image = tmp_path / "a.jpg"
+    make_image(image)
+    parents = FakeDetector({0: "person"}, [[Detection(0, "person", (10, 20, 60, 120), 0.9)]])
+    children = FakeDetector({0: "helmet"}, [[Detection(0, "helmet", (5, 10, 20, 30), 0.7)]])
+    result = pipeline(parents, children).predict(image)
+    assert children.calls == 1
+    assert children.batch_sizes == [1]
+    assert result.persons[0].ppe[0].class_name == "helmet"
 
 
 def test_multi_person_ownership_and_global_mapping(tmp_path):
@@ -46,6 +70,73 @@ def test_multi_person_ownership_and_global_mapping(tmp_path):
     assert result.persons[1].ppe[0].class_name == "glasses"
     assert result.persons[0].ppe[0].bbox == (12, 25, 27, 45)
     assert result.persons[1].ppe[0].bbox == (99, 29, 112, 37)
+    assert children.calls == 1
+    assert children.batch_sizes == [2]
+
+
+def test_invalid_middle_crop_does_not_shift_ownership(tmp_path):
+    image = tmp_path / "a.jpg"
+    make_image(image, width=300, height=200)
+    parents = FakeDetector(
+        {0: "person"},
+        [[
+            Detection(0, "person", (10, 10, 50, 100), 0.9),
+            Detection(0, "person", (80, 20, 80, 90), 0.8),
+            Detection(0, "person", (150, 30, 210, 150), 0.7),
+        ]],
+    )
+    children = FakeDetector(
+        {0: "helmet", 1: "vest"},
+        [[Detection(0, "helmet", (2, 3, 12, 13), 0.9)], [Detection(1, "vest", (4, 5, 14, 20), 0.8)]],
+    )
+    result = pipeline(parents, children).predict(image)
+    assert [person.id for person in result.persons] == [0, 2]
+    assert result.persons[0].ppe[0].class_name == "helmet"
+    assert result.persons[1].ppe[0].class_name == "vest"
+    assert children.batch_sizes == [2]
+
+
+def test_chunked_batching_uses_expected_call_sizes(tmp_path):
+    image = tmp_path / "crowd.jpg"
+    make_image(image, width=400, height=200)
+    detections = [Detection(0, "person", (5 + i * 35, 20, 30 + i * 35, 150), 0.9) for i in range(10)]
+    parents = FakeDetector({0: "person"}, [detections])
+    children = FakeDetector({0: "helmet"}, [[] for _ in range(10)])
+    pipe = PPEPipeline("unused", "unused", ppe_batch_size=4, _person_detector=parents, _ppe_detector=children)
+    result = pipe.predict(image)
+    assert len(result.persons) == 10
+    assert children.calls == 3
+    assert children.batch_sizes == [4, 4, 2]
+
+
+def test_pipeline_required_global_coordinate_example(tmp_path):
+    image = tmp_path / "a.jpg"
+    make_image(image, width=300, height=250)
+    parents = FakeDetector({0: "person"}, [[Detection(0, "person", (100, 50, 200, 200), 0.9)]])
+    children = FakeDetector({0: "helmet"}, [[Detection(0, "helmet", (10, 20, 60, 100), 0.8)]])
+    pipe = PPEPipeline("unused", "unused", crop_padding=0, _person_detector=parents, _ppe_detector=children)
+    assert pipe.predict(image).persons[0].ppe[0].bbox == (110, 70, 160, 150)
+
+
+def test_pipeline_rejects_backend_result_count_mismatch(tmp_path):
+    image = tmp_path / "a.jpg"
+    make_image(image)
+    parents = FakeDetector({0: "person"}, [[Detection(0, "person", (10, 10, 50, 100), 0.9)]])
+    children = FakeDetector({0: "helmet"}, [])
+    with pytest.raises(RuntimeError, match="1 person crops"):
+        pipeline(parents, children).predict(image)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_pipeline_rejects_non_positive_batch_size(value):
+    with pytest.raises(ValueError, match="positive integer"):
+        PPEPipeline(
+            "unused",
+            "unused",
+            ppe_batch_size=value,
+            _person_detector=FakeDetector({0: "person"}, []),
+            _ppe_detector=FakeDetector({}, []),
+        )
 
 
 def test_person_class_by_id_and_name(tmp_path):

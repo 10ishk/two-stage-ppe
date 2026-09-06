@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "two-stage-ppe"
-version = "0.3.0"
+version = "0.4.0"
 description = "Reusable person-to-PPE detection with crop-based inference and global coordinate remapping."
 readme = "README.md"
 requires-python = ">=3.10"

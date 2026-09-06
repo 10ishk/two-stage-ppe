@@ -2,13 +2,13 @@
 
 An open-source framework for detecting people first, then detecting PPE inside person crops while preserving ownership and full-image coordinates.
 
-> **Status:** v0.2.0. The initial backend is Ultralytics YOLO. Checkpoints, datasets, and sample predictions are intentionally not distributed.
+> **Status:** v0.3.0. The initial backend is Ultralytics YOLO. Checkpoints, datasets, and sample predictions are intentionally not distributed.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    A[Full image] --> B[Person detector]
+    A[Image or video frame] --> B[Person detector]
     B --> C[Padded person crops]
     C --> D[Batched PPE detector]
     D --> E[Crop-to-global remapping]
@@ -84,6 +84,42 @@ Useful options include `--person-conf`, `--ppe-conf`, `--iou`, `--crop-padding`,
 
 Larger PPE batches reduce model-call overhead but use more accelerator memory. Use a smaller `ppe_batch_size` or `--ppe-batch-size` on constrained GPUs. No automatic out-of-memory retry is performed.
 
+## Video inference
+
+Models remain loaded once, frames are processed incrementally, and PPE crops stay batched within each processed frame.
+
+```bash
+two-stage-ppe video \
+  --input input.mp4 \
+  --output output.mp4 \
+  --person-model person.pt \
+  --ppe-model ppe.pt \
+  --ppe-batch-size 8 \
+  --frame-stride 2 \
+  --jsonl results.jsonl
+```
+
+```python
+from two_stage_ppe import PPEPipeline
+
+pipeline = PPEPipeline("person.pt", "ppe.pt", ppe_batch_size=8)
+summary = pipeline.predict_video(
+    "input.mp4",
+    "output.mp4",
+    save_json=True,
+    frame_stride=2,
+    start_frame=0,
+    max_frames=100,
+)
+print(summary.to_dict())
+```
+
+`frame_stride=1` runs inference on every frame; `2` processes every second frame. Output video remains playable because all frames in the selected range are written: processed frames receive fresh annotations and skipped frames remain unannotated. Detections are never copied forward. `start_frame` uses the original zero-based frame index, while `max_frames` limits the number of processed frames.
+
+JSONL output writes one object immediately after each processed frame, so long videos do not accumulate structured results in memory. A `frame_callback` can consume the same `FrameResult` stream in Python. Container and codec availability depends on the local OpenCV build.
+
+**V0.3 does not perform tracking. Person IDs are frame-local:** person `0` in one frame is not guaranteed to represent the same real person as person `0` in another frame.
+
 ## JSON result
 
 ```json
@@ -142,22 +178,23 @@ python tools/evaluate_cascade.py --ground-truth validation_gt.json --predictions
 ```text
 src/two_stage_ppe/   Public package, pipeline, results, rendering
 tools/               Dataset conversion, preparation, evaluation, calibration
-examples/            Image and directory usage examples
+examples/            Image, directory, and video usage examples
 tests/               Weight-free unit and synthetic integration tests
 .github/             CI and collaboration templates
 ```
 
 ## Limitations
 
-- Ultralytics YOLO is the only inference backend in v0.2.0.
-- Processing is image-based; PPE crops are batched independently for each source image.
+- Ultralytics YOLO is the only inference backend in v0.3.0.
+- PPE crops are batched independently for each image or processed video frame.
+- Video identity is frame-local; tracking and cross-frame smoothing are not performed.
 - Cross-person duplicate suppression is not performed.
 - Accuracy and latency depend on user-provided checkpoints, data, hardware, thresholds, and scene density.
-- Video, tracking, deployment exports, and web interfaces are outside the v0.2.0 scope.
+- Live streams, tracking, deployment exports, and web interfaces are outside the v0.3.0 scope.
 
 ## Roadmap
 
-- Cross-image scheduling and throughput benchmarking
+- Optional tracking with explicit persistent-identity result types
 - Optional cross-person duplicate analysis
 - Video and tracking support
 - Export/runtime adapters after the core API stabilizes

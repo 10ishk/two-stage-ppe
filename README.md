@@ -2,7 +2,7 @@
 
 An open-source framework for detecting people first, then detecting PPE inside person crops while preserving ownership and full-image coordinates.
 
-> **Status:** v0.1.0. The initial backend is Ultralytics YOLO. Checkpoints, datasets, and sample predictions are intentionally not distributed.
+> **Status:** v0.2.0. The initial backend is Ultralytics YOLO. Checkpoints, datasets, and sample predictions are intentionally not distributed.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ An open-source framework for detecting people first, then detecting PPE inside p
 flowchart LR
     A[Full image] --> B[Person detector]
     B --> C[Padded person crops]
-    C --> D[PPE detector]
+    C --> D[Batched PPE detector]
     D --> E[Crop-to-global remapping]
     E --> F[Hierarchical Python result]
     F --> G[OpenCV image]
@@ -19,7 +19,7 @@ flowchart LR
 
 ## Why two stages?
 
-PPE can occupy very few pixels in a full scene. Cropping each detected person gives the child detector a larger effective view of small equipment and provides a natural `person -> PPE` relationship. This design trades additional inference calls for clearer ownership and often better small-object visibility.
+PPE can occupy very few pixels in a full scene. Cropping each detected person gives the child detector a larger effective view of small equipment and provides a natural `person -> PPE` relationship. V0.2 sends the crops from each source image to the PPE model as an ordered batch, reducing backend invocations in multi-person scenes while retaining explicit ownership.
 
 ## Installation
 
@@ -44,6 +44,7 @@ pipeline = PPEPipeline(
     person_conf=0.30,
     ppe_conf=0.30,
     crop_padding=0.05,
+    ppe_batch_size=8,
 )
 
 result = pipeline.predict("image.jpg")
@@ -51,7 +52,7 @@ result.save_image("output.jpg")
 result.save_json("output.json")
 ```
 
-The models are loaded once when `PPEPipeline` is created. Reuse a pipeline for multiple images.
+The models are loaded once when `PPEPipeline` is created. Reuse a pipeline for multiple images. `ppe_batch_size=None` (the default) batches all valid person crops from one source image, `1` is effectively sequential PPE inference, and a positive integer processes chunks of at most that size.
 
 ## Python API
 
@@ -73,12 +74,15 @@ two-stage-ppe detect \
   --output results/ \
   --person-model person.pt \
   --ppe-model ppe.pt \
+  --ppe-batch-size 8 \
   --save-json
 ```
 
 The same interface is available through `python -m two_stage_ppe detect ...`.
 
-Useful options include `--person-conf`, `--ppe-conf`, `--iou`, `--crop-padding`, `--device`, `--person-class`, `--save-json`, and `--no-images`. `--person-class` accepts either a model class name or numeric class ID. PPE names always come from the supplied PPE checkpoint.
+Useful options include `--person-conf`, `--ppe-conf`, `--iou`, `--crop-padding`, `--ppe-batch-size`, `--device`, `--person-class`, `--save-json`, and `--no-images`. `--person-class` accepts either a model class name or numeric class ID. PPE names always come from the supplied PPE checkpoint.
+
+Larger PPE batches reduce model-call overhead but use more accelerator memory. Use a smaller `ppe_batch_size` or `--ppe-batch-size` on constrained GPUs. No automatic out-of-memory retry is performed.
 
 ## JSON result
 
@@ -145,15 +149,15 @@ tests/               Weight-free unit and synthetic integration tests
 
 ## Limitations
 
-- Ultralytics YOLO is the only inference backend in v0.1.0.
-- Processing is image-based and person crops are evaluated sequentially.
+- Ultralytics YOLO is the only inference backend in v0.2.0.
+- Processing is image-based; PPE crops are batched independently for each source image.
 - Cross-person duplicate suppression is not performed.
 - Accuracy and latency depend on user-provided checkpoints, data, hardware, thresholds, and scene density.
-- Video, tracking, deployment exports, and web interfaces are outside the v0.1.0 scope.
+- Video, tracking, deployment exports, and web interfaces are outside the v0.2.0 scope.
 
 ## Roadmap
 
-- Batched child-crop inference with stable ownership mapping
+- Cross-image scheduling and throughput benchmarking
 - Optional cross-person duplicate analysis
 - Video and tracking support
 - Export/runtime adapters after the core API stabilizes

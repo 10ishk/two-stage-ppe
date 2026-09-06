@@ -105,6 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--calibrate-thresholds", action="store_true")
     train.add_argument("--prepare-only", action="store_true")
     train.add_argument("--dry-run", action="store_true")
+    train.add_argument("--resume", action="store_true", help="Reuse compatible completed project stages")
+    train.add_argument("--restart-from", choices=["dataset_audit", "prepared", "person_trained", "person_validated", "ppe_trained", "ppe_validated", "calibrated", "completed", "person_train", "person_validate", "ppe_train", "ppe_validate", "calibrate"], help="With --resume, rerun this stage and its downstream stages")
     return parser
 
 
@@ -148,7 +150,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             prepare_only=args.prepare_only,
             dry_run=args.dry_run,
         )
-        result = train_two_stage(config)
+        result = train_two_stage(config, resume=args.resume, restart_from=args.restart_from)
         print(json.dumps(result.to_dict(), indent=2))
         return 0
 

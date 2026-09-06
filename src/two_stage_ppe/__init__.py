@@ -4,7 +4,7 @@ from .config import PipelineConfig
 from .pipeline import PPEPipeline
 from .results import Detection, FrameResult, ImageResult, PersonResult, VideoSummary
 from .tracking import ByteTrackPersonTracker, PersonTracker, TrackerConfig, TrackedPerson
-from .training import TrainingConfig, TrainingResult, train_two_stage
+from .training import ResumePlan, TrainingConfig, TrainingResult, TrainingStage, plan_resume, train_two_stage
 
 __all__ = [
     "Detection",
@@ -20,6 +20,9 @@ __all__ = [
     "TrackedPerson",
     "TrainingConfig",
     "TrainingResult",
+    "TrainingStage",
+    "ResumePlan",
+    "plan_resume",
     "train_two_stage",
 ]
 __version__ = "0.5.0"

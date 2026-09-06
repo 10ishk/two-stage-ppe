@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import shutil
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -14,6 +17,30 @@ from .dataset import DatasetAudit, PreparationResult, audit_voc_dataset, determi
 from .geometry import iou
 
 LOGGER = logging.getLogger(__name__)
+
+
+class TrainingStage(str, Enum):
+    AUDIT = "dataset_audit"
+    PREPARED = "prepared"
+    PERSON_TRAINED = "person_trained"
+    PERSON_VALIDATED = "person_validated"
+    PPE_TRAINED = "ppe_trained"
+    PPE_VALIDATED = "ppe_validated"
+    CALIBRATED = "calibrated"
+    COMPLETE = "completed"
+
+
+STAGE_ORDER = tuple(stage.value for stage in TrainingStage)
+
+
+@dataclass(frozen=True)
+class ResumePlan:
+    reuse: list[str]
+    run: list[str]
+    reasons: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -98,6 +125,10 @@ class TrainingResult:
     training_durations: dict[str, float] = field(default_factory=dict)
     calibration: dict[str, Any] | None = None
     failure: dict[str, str] | None = None
+    resumed: bool = False
+    reused_stages: list[str] = field(default_factory=list)
+    executed_stages: list[str] = field(default_factory=list)
+    resume_plan: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -220,27 +251,169 @@ def calibrate_validation(config: TrainingConfig, preparation: PreparationResult,
 Calibrator = Callable[[TrainingConfig, PreparationResult, Path, Path], dict[str, Any]]
 
 
-def _manifest(result: TrainingResult, config: TrainingConfig) -> dict[str, Any]:
+def _digest(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def dataset_fingerprint(dataset: str | Path) -> str:
+    """Fingerprint source metadata and annotation bytes without hashing large images."""
+    root = Path(dataset)
+    records = []
+    for directory in (root / "images", root / "annotations", root / "labels"):
+        if not directory.is_dir():
+            continue
+        for path in sorted(item for item in directory.rglob("*") if item.is_file()):
+            stat = path.stat()
+            record: list[Any] = [path.relative_to(root).as_posix(), stat.st_size, stat.st_mtime_ns]
+            if path.suffix.lower() in {".xml", ".txt"}:
+                record.append(hashlib.sha256(path.read_bytes()).hexdigest())
+            records.append(record)
+    return _digest(records)
+
+
+def configuration_fingerprints(config: TrainingConfig, source_fingerprint: str) -> dict[str, str]:
+    preparation = {
+        "dataset": source_fingerprint, "parent_class": config.parent_class,
+        "child_classes": config.child_classes, "padding": config.padding,
+        "ioa_threshold": config.ioa_threshold, "ratios": [config.train_ratio, config.val_ratio, config.test_ratio],
+        "seed": config.seed,
+    }
+    person_training = _digest({"dataset": source_fingerprint, "parent_class": config.parent_class, "ratios": preparation["ratios"], "seed": config.seed, "model": config.person_model, "epochs": config.person_epochs, "imgsz": config.imgsz, "batch": config.person_batch, "patience": config.patience})
+    ppe_training = _digest({"preparation": _digest(preparation), "model": config.ppe_model, "epochs": config.ppe_epochs, "imgsz": config.imgsz, "batch": config.ppe_batch, "patience": config.patience})
+    return {
+        "dataset": source_fingerprint,
+        "preparation": _digest(preparation),
+        "person_training": person_training,
+        "ppe_training": ppe_training,
+        "calibration": _digest({"preparation": _digest(preparation), "person_training": person_training, "ppe_training": ppe_training, "candidates": config.calibration_candidates}),
+    }
+
+
+def _manifest(result: TrainingResult, config: TrainingConfig, fingerprints: dict[str, str] | None = None) -> dict[str, Any]:
     project = Path(result.project_path)
     person = Path(result.person_weight_path) if result.person_weight_path else None
     ppe = Path(result.ppe_weight_path) if result.ppe_weight_path else None
     selected = (result.calibration or {}).get("selected", {})
-    return {"schema_version": 1, "status": result.status, "models": {"person": str(person.relative_to(project)) if person else None, "ppe": str(ppe.relative_to(project)) if ppe else None}, "classes": result.class_mappings, "inference": {"person_conf": selected.get("person_conf", 0.25), "ppe_conf": selected.get("ppe_conf", 0.25), "crop_padding": config.padding, "iou": 0.45}, "dataset": {"split_counts": result.split_counts, "source_format": "pascal_voc"}, "metrics": {"person_validation": result.person_validation_metrics, "ppe_validation": result.ppe_validation_metrics}, "stages": result.stages, "calibration": result.calibration, "failure": result.failure}
+    manifest_config = config.to_dict()
+    manifest_config.pop("dataset", None)
+    manifest_config.pop("output", None)
+    return {
+        "schema_version": 2, "status": result.status,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "models": {"person": str(person.relative_to(project)) if person else None, "ppe": str(ppe.relative_to(project)) if ppe else None},
+        "classes": result.class_mappings,
+        "inference": {"person_conf": selected.get("person_conf", 0.25), "ppe_conf": selected.get("ppe_conf", 0.25), "crop_padding": config.padding, "iou": 0.45},
+        "dataset": {"split_counts": result.split_counts, "source_format": "pascal_voc"},
+        "metrics": {"person_validation": result.person_validation_metrics, "ppe_validation": result.ppe_validation_metrics},
+        "stages": result.stages, "completed_stages": result.stages,
+        "fingerprints": fingerprints or {}, "configuration": manifest_config,
+        "calibration": result.calibration, "failure": result.failure,
+    }
 
 
-def _write_project_files(result: TrainingResult, config: TrainingConfig) -> None:
+def _write_project_files(result: TrainingResult, config: TrainingConfig, fingerprints: dict[str, str] | None = None) -> None:
     project = Path(result.project_path)
     result.save(project / "training_summary.json")
-    (project / "project.json").write_text(json.dumps(_manifest(result, config), indent=2) + "\n", encoding="utf-8")
+    (project / "project.json").write_text(json.dumps(_manifest(result, config, fingerprints), indent=2) + "\n", encoding="utf-8")
 
 
-def train_two_stage(config: TrainingConfig, *, trainer: TrainingAdapter | None = None, calibrator: Calibrator | None = None) -> TrainingResult:
+def _old_stages(payload: dict[str, Any]) -> set[str]:
+    stages = set(payload.get("completed_stages") or payload.get("stages") or [])
+    if "validated" in stages:
+        stages.update({TrainingStage.PERSON_VALIDATED.value, TrainingStage.PPE_VALIDATED.value})
+    if payload.get("status") == "completed":
+        stages.add(TrainingStage.COMPLETE.value)
+    return stages
+
+
+def _artifact_state(project: Path, stages: set[str], payload: dict[str, Any]) -> dict[str, bool]:
+    prepared = all((project / item).is_file() for item in ("data/splits.json", "data/parent_dataset/dataset.yaml", "data/child_dataset/dataset.yaml"))
+    person_path, ppe_path = project / "weights/person_best.pt", project / "weights/ppe_best.pt"
+    person = person_path.is_file() and person_path.stat().st_size > 0
+    ppe = ppe_path.is_file() and ppe_path.stat().st_size > 0
+    metrics = payload.get("metrics", {})
+    return {
+        TrainingStage.AUDIT.value: TrainingStage.AUDIT.value in stages,
+        TrainingStage.PREPARED.value: prepared and TrainingStage.PREPARED.value in stages,
+        TrainingStage.PERSON_TRAINED.value: person and TrainingStage.PERSON_TRAINED.value in stages,
+        TrainingStage.PERSON_VALIDATED.value: TrainingStage.PERSON_VALIDATED.value in stages and "person_validation" in metrics,
+        TrainingStage.PPE_TRAINED.value: ppe and TrainingStage.PPE_TRAINED.value in stages,
+        TrainingStage.PPE_VALIDATED.value: TrainingStage.PPE_VALIDATED.value in stages and "ppe_validation" in metrics,
+        TrainingStage.CALIBRATED.value: (project / "metrics/calibration.json").is_file() and TrainingStage.CALIBRATED.value in stages,
+        TrainingStage.COMPLETE.value: TrainingStage.COMPLETE.value in stages,
+    }
+
+
+def plan_resume(config: TrainingConfig, *, restart_from: str | TrainingStage | None = None) -> ResumePlan:
+    project = Path(config.output)
+    manifest_path = project / "project.json"
+    if not manifest_path.is_file():
+        return ResumePlan([], list(STAGE_ORDER), {TrainingStage.AUDIT.value: "no existing manifest"})
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    old_fingerprints = payload.get("fingerprints", {})
+    current = configuration_fingerprints(config, dataset_fingerprint(config.dataset))
+    available = _artifact_state(project, _old_stages(payload), payload)
+    reasons: dict[str, str] = {}
+    compatible = {
+        TrainingStage.AUDIT.value: old_fingerprints.get("dataset") == current["dataset"],
+        TrainingStage.PREPARED.value: old_fingerprints.get("preparation") == current["preparation"],
+        TrainingStage.PERSON_TRAINED.value: old_fingerprints.get("person_training") == current["person_training"],
+        TrainingStage.PERSON_VALIDATED.value: old_fingerprints.get("person_training") == current["person_training"],
+        TrainingStage.PPE_TRAINED.value: old_fingerprints.get("ppe_training") == current["ppe_training"],
+        TrainingStage.PPE_VALIDATED.value: old_fingerprints.get("ppe_training") == current["ppe_training"],
+        TrainingStage.CALIBRATED.value: config.calibrate_thresholds and old_fingerprints.get("calibration") == current["calibration"],
+        TrainingStage.COMPLETE.value: True,
+    }
+    # Schema v1 has no fingerprints: keep inference compatibility but never blindly reuse training artifacts.
+    reuse = []
+    for stage in STAGE_ORDER[:-1]:
+        if available.get(stage, False) and compatible.get(stage, False):
+            reuse.append(stage)
+        else:
+            reasons[stage] = "artifact missing or configuration/dataset fingerprint changed"
+    if not config.calibrate_thresholds:
+        reuse = [stage for stage in reuse if stage != TrainingStage.CALIBRATED.value]
+    # Validation and calibration can only be reused with the exact checkpoints they measured.
+    if TrainingStage.PERSON_TRAINED.value not in reuse:
+        reuse = [stage for stage in reuse if stage not in {TrainingStage.PERSON_VALIDATED.value, TrainingStage.CALIBRATED.value}]
+    if TrainingStage.PPE_TRAINED.value not in reuse:
+        reuse = [stage for stage in reuse if stage not in {TrainingStage.PPE_VALIDATED.value, TrainingStage.CALIBRATED.value}]
+    if restart_from:
+        name = restart_from.value if isinstance(restart_from, TrainingStage) else str(restart_from)
+        aliases = {"audit": "dataset_audit", "person_train": "person_trained", "person_validate": "person_validated", "ppe_train": "ppe_trained", "ppe_validate": "ppe_validated", "calibrate": "calibrated", "complete": "completed"}
+        name = aliases.get(name, name)
+        if name not in STAGE_ORDER:
+            raise ValueError(f"Unknown restart stage {restart_from!r}; choose from {', '.join(STAGE_ORDER)}")
+        forced = set(STAGE_ORDER[STAGE_ORDER.index(name):])
+        reuse = [stage for stage in reuse if stage not in forced]
+        reasons[name] = "explicit restart requested"
+    required = list(STAGE_ORDER[:-1])
+    if not config.calibrate_thresholds:
+        required.remove(TrainingStage.CALIBRATED.value)
+    run = [stage for stage in required if stage not in reuse]
+    if not run and available.get(TrainingStage.COMPLETE.value):
+        reuse.append(TrainingStage.COMPLETE.value)
+    else:
+        run.append(TrainingStage.COMPLETE.value)
+    return ResumePlan(reuse, run, reasons)
+
+
+def _prepared(project: Path, config: TrainingConfig) -> PreparationResult:
+    splits = json.loads((project / "data/splits.json").read_text(encoding="utf-8"))
+    child_mapping = {index: name for index, name in enumerate(config.child_classes)}
+    return PreparationResult(str(project / "data"), str(project / "data/parent_dataset"), str(project / "data/child_dataset"), str(project / "data/parent_dataset/dataset.yaml"), str(project / "data/child_dataset/dataset.yaml"), splits, {name: len(items) for name, items in splits.items()}, 0, 0, child_mapping)
+
+
+def train_two_stage(config: TrainingConfig, *, trainer: TrainingAdapter | None = None, calibrator: Calibrator | None = None, resume: bool = False, restart_from: str | TrainingStage | None = None) -> TrainingResult:
     dataset, project = Path(config.dataset), Path(config.output)
     if not dataset.is_dir():
         raise FileNotFoundError(dataset)
     if project.resolve() == dataset.resolve() or dataset.resolve() in project.resolve().parents:
         raise ValueError("output must not be the input dataset or one of its subdirectories")
-    if project.exists() and any(project.iterdir()):
+    if restart_from is not None and not resume:
+        raise ValueError("restart_from requires resume=True")
+    if project.exists() and any(project.iterdir()) and not resume:
         raise FileExistsError(f"Output project is not empty: {project}")
     audit = audit_voc_dataset(dataset)
     if audit.paired_count == 0:
@@ -255,53 +428,102 @@ def train_two_stage(config: TrainingConfig, *, trainer: TrainingAdapter | None =
     for warning in audit.warnings:
         LOGGER.warning(warning)
     splits = deterministic_split(paired_stems(dataset), config.train_ratio, config.val_ratio, config.test_ratio, config.seed)
-    result = TrainingResult(str(project), "dry_run" if config.dry_run else "dataset_audit", config.to_dict(), audit.to_dict(), {name: len(items) for name, items in splits.items()}, {"parent": {0: config.parent_class}, "children": {index: name for index, name in enumerate(config.child_classes)}}, ["dataset_audit"])
+    fingerprints = configuration_fingerprints(config, dataset_fingerprint(dataset))
+    plan = plan_resume(config, restart_from=restart_from) if resume else ResumePlan([], list(STAGE_ORDER), {})
+    result = TrainingResult(str(project), "dry_run" if config.dry_run else TrainingStage.AUDIT.value, config.to_dict(), audit.to_dict(), {name: len(items) for name, items in splits.items()}, {"parent": {0: config.parent_class}, "children": {index: name for index, name in enumerate(config.child_classes)}}, resumed=resume, reused_stages=list(plan.reuse), resume_plan=plan.to_dict())
     if config.dry_run:
         return result
 
     for name in ("data", "weights", "metrics", "logs"):
         (project / name).mkdir(parents=True, exist_ok=True)
-    current_stage = "prepared"
+    previous: dict[str, Any] = {}
+    summary = project / "training_summary.json"
+    if resume and summary.is_file():
+        previous = json.loads(summary.read_text(encoding="utf-8"))
+    result.person_validation_metrics = previous.get("person_validation_metrics", {})
+    result.ppe_validation_metrics = previous.get("ppe_validation_metrics", {})
+    result.training_durations = previous.get("training_durations", {})
+    result.calibration = previous.get("calibration")
+    current_stage = TrainingStage.PREPARED.value
     try:
-        preparation = prepare_voc_dataset(dataset, project / "data", config.parent_class, config.child_classes, padding=config.padding, ioa_threshold=config.ioa_threshold, train_ratio=config.train_ratio, val_ratio=config.val_ratio, test_ratio=config.test_ratio, seed=config.seed)
+        if TrainingStage.PREPARED.value in plan.reuse:
+            LOGGER.info("Reusing prepared dataset")
+            preparation = _prepared(project, config)
+        else:
+            LOGGER.info("Running dataset preparation")
+            if (project / "data").exists():
+                shutil.rmtree(project / "data")
+            (project / "data").mkdir(parents=True)
+            preparation = prepare_voc_dataset(dataset, project / "data", config.parent_class, config.child_classes, padding=config.padding, ioa_threshold=config.ioa_threshold, train_ratio=config.train_ratio, val_ratio=config.val_ratio, test_ratio=config.test_ratio, seed=config.seed)
+            result.executed_stages.append(TrainingStage.PREPARED.value)
         result.split_counts = preparation.split_counts
-        result.stages.append("prepared")
-        result.status = "prepared"
-        _write_project_files(result, config)
+        result.stages = [TrainingStage.AUDIT.value, TrainingStage.PREPARED.value]
+        result.executed_stages.insert(0, TrainingStage.AUDIT.value)
+        result.status = TrainingStage.PREPARED.value
+        result.failure = None
+        _write_project_files(result, config, fingerprints)
         if config.prepare_only:
             return result
 
         active_trainer = trainer or UltralyticsTrainingAdapter()
-        current_stage = "person_training"
+        current_stage = TrainingStage.PERSON_TRAINED.value
         person_path = project / "weights" / "person_best.pt"
-        person = active_trainer.train(stage="person", base_model=config.person_model, dataset_yaml=Path(preparation.parent_yaml), destination=person_path, logs=project / "logs", epochs=config.person_epochs, imgsz=config.imgsz, batch=config.person_batch, patience=config.patience, device=config.device, seed=config.seed, workers=config.workers)
-        result.person_weight_path = person.weight_path
-        result.training_durations["person"] = person.duration_seconds
-        result.stages.append("person_trained")
-        result.status = "person_trained"
-        _write_project_files(result, config)
-        result.person_validation_metrics = active_trainer.validate(weight=person_path, dataset_yaml=Path(preparation.parent_yaml), device=config.device)
+        if TrainingStage.PERSON_TRAINED.value in plan.reuse:
+            LOGGER.info("Reusing person checkpoint")
+            result.person_weight_path = str(person_path)
+        else:
+            LOGGER.info("Running person training")
+            person = active_trainer.train(stage="person", base_model=config.person_model, dataset_yaml=Path(preparation.parent_yaml), destination=person_path, logs=project / "logs", epochs=config.person_epochs, imgsz=config.imgsz, batch=config.person_batch, patience=config.patience, device=config.device, seed=config.seed, workers=config.workers)
+            result.person_weight_path = person.weight_path
+            result.training_durations["person"] = person.duration_seconds
+            result.executed_stages.append(TrainingStage.PERSON_TRAINED.value)
+        result.stages.append(TrainingStage.PERSON_TRAINED.value)
+        result.status = TrainingStage.PERSON_TRAINED.value
+        _write_project_files(result, config, fingerprints)
+        current_stage = TrainingStage.PERSON_VALIDATED.value
+        if TrainingStage.PERSON_VALIDATED.value not in plan.reuse:
+            result.person_validation_metrics = active_trainer.validate(weight=person_path, dataset_yaml=Path(preparation.parent_yaml), device=config.device)
+            result.executed_stages.append(TrainingStage.PERSON_VALIDATED.value)
+        result.stages.append(TrainingStage.PERSON_VALIDATED.value)
 
-        current_stage = "ppe_training"
+        current_stage = TrainingStage.PPE_TRAINED.value
         ppe_path = project / "weights" / "ppe_best.pt"
-        ppe = active_trainer.train(stage="ppe", base_model=config.ppe_model, dataset_yaml=Path(preparation.child_yaml), destination=ppe_path, logs=project / "logs", epochs=config.ppe_epochs, imgsz=config.imgsz, batch=config.ppe_batch, patience=config.patience, device=config.device, seed=config.seed, workers=config.workers)
-        result.ppe_weight_path = ppe.weight_path
-        result.training_durations["ppe"] = ppe.duration_seconds
-        result.stages.append("ppe_trained")
-        result.ppe_validation_metrics = active_trainer.validate(weight=ppe_path, dataset_yaml=Path(preparation.child_yaml), device=config.device)
-        result.stages.append("validated")
-        result.status = "validated"
+        if TrainingStage.PPE_TRAINED.value in plan.reuse:
+            LOGGER.info("Reusing PPE checkpoint")
+            result.ppe_weight_path = str(ppe_path)
+        else:
+            LOGGER.info("Running PPE training")
+            ppe = active_trainer.train(stage="ppe", base_model=config.ppe_model, dataset_yaml=Path(preparation.child_yaml), destination=ppe_path, logs=project / "logs", epochs=config.ppe_epochs, imgsz=config.imgsz, batch=config.ppe_batch, patience=config.patience, device=config.device, seed=config.seed, workers=config.workers)
+            result.ppe_weight_path = ppe.weight_path
+            result.training_durations["ppe"] = ppe.duration_seconds
+            result.executed_stages.append(TrainingStage.PPE_TRAINED.value)
+        result.stages.append(TrainingStage.PPE_TRAINED.value)
+        _write_project_files(result, config, fingerprints)
+        current_stage = TrainingStage.PPE_VALIDATED.value
+        if TrainingStage.PPE_VALIDATED.value not in plan.reuse:
+            result.ppe_validation_metrics = active_trainer.validate(weight=ppe_path, dataset_yaml=Path(preparation.child_yaml), device=config.device)
+            result.executed_stages.append(TrainingStage.PPE_VALIDATED.value)
+        result.stages.append(TrainingStage.PPE_VALIDATED.value)
+        result.status = TrainingStage.PPE_VALIDATED.value
 
         if config.calibrate_thresholds:
-            current_stage = "calibration"
-            result.calibration = (calibrator or calibrate_validation)(config, preparation, person_path, ppe_path)
-            (project / "metrics" / "calibration.json").write_text(json.dumps(result.calibration, indent=2) + "\n", encoding="utf-8")
-            result.stages.append("calibrated")
-        result.status = "completed"
-        _write_project_files(result, config)
+            current_stage = TrainingStage.CALIBRATED.value
+            if TrainingStage.CALIBRATED.value not in plan.reuse:
+                LOGGER.info("Running calibration")
+                result.calibration = (calibrator or calibrate_validation)(config, preparation, person_path, ppe_path)
+                (project / "metrics" / "calibration.json").write_text(json.dumps(result.calibration, indent=2) + "\n", encoding="utf-8")
+                result.executed_stages.append(TrainingStage.CALIBRATED.value)
+            result.stages.append(TrainingStage.CALIBRATED.value)
+        else:
+            result.calibration = None
+        result.status = TrainingStage.COMPLETE.value
+        result.stages.append(TrainingStage.COMPLETE.value)
+        result.executed_stages.append(TrainingStage.COMPLETE.value)
+        result.failure = None
+        _write_project_files(result, config, fingerprints)
         return result
     except Exception as exc:
         result.status = "failed"
         result.failure = {"stage": current_stage, "type": type(exc).__name__, "message": str(exc)}
-        _write_project_files(result, config)
+        _write_project_files(result, config, fingerprints)
         raise

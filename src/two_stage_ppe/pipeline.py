@@ -67,6 +67,11 @@ class PPEPipeline:
         if not manifest_path.is_file():
             raise FileNotFoundError(manifest_path)
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        status = payload.get("status")
+        if status and status not in {"completed", "complete"}:
+            failure = payload.get("failure") or {}
+            detail = f"; failed stage: {failure.get('stage')}" if failure.get("stage") else ""
+            raise ValueError(f"Training project is incomplete (status: {status}){detail}")
         models = payload.get("models", {})
         if not models.get("person") or not models.get("ppe"):
             raise ValueError("Project manifest does not contain both trained model paths")

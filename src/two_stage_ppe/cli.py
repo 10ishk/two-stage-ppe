@@ -78,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write one JSON object per processed frame; omit PATH for an automatic name",
     )
     video.add_argument("--no-render", action="store_true", help="Write frames without annotations")
+    video.add_argument("--track", action="store_true", help="Assign persistent ByteTrack IDs to persons")
     return parser
 
 
@@ -104,6 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         start_frame=args.start_frame,
         max_frames=args.max_frames,
         render=not args.no_render,
+        tracking=args.track,
     )
     logging.info(
         "Processed %d video frames in %.2fs (%.2f processed frames/s)",

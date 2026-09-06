@@ -2,7 +2,7 @@
 
 ## Dataset contract
 
-V0.5 accepts Pascal VOC XML with this layout:
+V0.6 accepts Pascal VOC XML with this layout:
 
 ```text
 dataset/
@@ -42,7 +42,29 @@ runs/my_project/
 └── training_summary.json
 ```
 
-Ultralytics progress remains visible and its run artifacts live under `logs/`. Project metadata is updated after preparation and after each completed stage. If later training or validation fails, existing artifacts are retained and the manifest records the failing stage, exception type, and message. V0.5 does not automatically resume failed runs or overwrite a non-empty project directory.
+Ultralytics progress remains visible and its run artifacts live under `logs/`. Project metadata is updated after preparation and after each completed stage. If later training or validation fails, existing artifacts are retained and the manifest records the failing stage, exception type, and message.
+
+## State lifecycle and resume
+
+```mermaid
+flowchart LR
+  A[dataset_audit] --> B[prepared]
+  B --> C[person_trained] --> D[person_validated]
+  B --> E[ppe_trained] --> F[ppe_validated]
+  D --> G[calibrated]
+  F --> G
+  D --> H[completed]
+  F --> H
+  G --> H
+```
+
+Pass `resume=True` to `train_two_stage`, or `--resume` on the CLI. The planner compares schema-v2 fingerprints and verifies dataset manifests/YAML files, non-empty checkpoints, validation metadata, and calibration output rather than trusting status alone. A completed compatible project is idempotent and makes no trainer calls. Failed stages are never marked complete; a later resume keeps compatible artifacts, reruns the incomplete stage, and clears the failure after success.
+
+Configuration is fingerprinted by dependency group. Changing person epochs reruns person training/validation but can reuse PPE training. Changing child classes, crop padding, IoA, split settings, or source data regenerates preparation and reruns affected PPE work. Calibration candidate changes rerun calibration without retraining either model. The source fingerprint hashes annotation content and records relative paths, sizes, and modification times; image bytes are not hashed, which keeps scans practical but means a same-size image rewritten while preserving its timestamp may not be detected.
+
+Use `--resume --dry-run` to return a read-only `reuse`/`run` plan. Use `--resume --restart-from ppe_train` (or another canonical/CLI stage name) to invalidate that point and downstream work. Resume is project-stage recovery, not Ultralytics optimizer/epoch continuation.
+
+Schema-v1 (v0.5) manifests remain supported by `PPEPipeline.from_project()`. Because they lack fingerprints, training resume conservatively rebuilds rather than blindly trusting their artifacts. New incomplete manifests produce a clear project-state error during pipeline loading.
 
 ## Calibration
 

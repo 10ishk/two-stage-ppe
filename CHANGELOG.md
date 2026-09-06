@@ -2,6 +2,15 @@
 
 All notable changes are documented here.
 
+## 0.6.0
+
+- Add explicit stage-aware training resume and idempotent completed-project reuse.
+- Verify prepared datasets, checkpoints, validation metadata, and calibration artifacts.
+- Add dependency-scoped configuration and practical source-dataset fingerprints.
+- Add read-only dry-run resume plans and controlled `--restart-from` invalidation.
+- Preserve failure context while enabling successful recovery on later runs.
+- Evolve project manifests to schema v2 while retaining v0.5 inference loading.
+
 ## 0.5.0
 
 - Add end-to-end two-stage Ultralytics training orchestration.

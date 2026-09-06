@@ -194,6 +194,21 @@ result = train_two_stage(TrainingConfig(
 pipeline = PPEPipeline.from_project("runs/my_project/project.json")
 ```
 
+## Resume interrupted training
+
+Resume is explicit and operates at project-stage boundaries:
+
+```bash
+two-stage-ppe train \
+  --dataset dataset/ \
+  --output runs/my_project \
+  --parent-class person \
+  --child-classes helmet gloves boots vest \
+  --resume
+```
+
+The planner verifies manifest fingerprints and expected artifacts before reuse. Add `--dry-run` to inspect its `reuse`/`run` plan without changing files, or `--restart-from ppe_train` to rerun PPE training and downstream stages deliberately. Resume does not continue within an interrupted Ultralytics epoch; an incomplete training stage starts again.
+
 The generated project contains prepared data, organized best checkpoints, Ultralytics logs, validation metrics, a structured training summary, and `project.json`. If the PPE stage fails, the prepared data, completed person checkpoint, metadata, and failure context remain available. See [docs/training.md](docs/training.md) for the complete contract.
 
 Training orchestration does not guarantee model quality. Results depend on label correctness, class coverage, source diversity, base checkpoints, hyperparameters, hardware, and available training time.
@@ -268,11 +283,11 @@ tests/               Weight-free unit and synthetic integration tests
 - Worker tracking is optional and does not provide biometric re-identification or guaranteed identity persistence.
 - Cross-person duplicate suppression is not performed.
 - Accuracy and latency depend on user-provided checkpoints, data, hardware, thresholds, and scene density.
-- Training resume, hyperparameter search, live streams, PPE history/smoothing, deployment exports, and web interfaces are outside the v0.5.0 scope.
+- Epoch-level training resume, hyperparameter search, live streams, PPE history/smoothing, deployment exports, and web interfaces are outside the v0.6.0 scope.
 
 ## Roadmap
 
-- Stage-aware training resume with manifest-verified artifact reuse
+- Project inspection and portable training-project bundles
 - Optional cross-person duplicate analysis
 - Video and tracking support
 - Export/runtime adapters after the core API stabilizes

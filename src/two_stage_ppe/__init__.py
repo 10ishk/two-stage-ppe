@@ -2,7 +2,15 @@
 
 from .config import PipelineConfig
 from .pipeline import PPEPipeline
-from .results import Detection, ImageResult, PersonResult
+from .results import Detection, FrameResult, ImageResult, PersonResult, VideoSummary
 
-__all__ = ["Detection", "ImageResult", "PPEPipeline", "PersonResult", "PipelineConfig"]
+__all__ = [
+    "Detection",
+    "FrameResult",
+    "ImageResult",
+    "PPEPipeline",
+    "PersonResult",
+    "PipelineConfig",
+    "VideoSummary",
+]
 __version__ = "0.2.0"

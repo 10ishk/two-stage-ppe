@@ -84,3 +84,64 @@ class ImageResult:
             raise OSError(f"Could not write image: {destination}")
         return destination
 
+
+@dataclass
+class FrameResult:
+    """Structured detections for one frame; person IDs are frame-local."""
+
+    frame_index: int
+    timestamp_seconds: float | None
+    width: int
+    height: int
+    persons: list[PersonResult] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "frame_index": self.frame_index,
+            "timestamp_seconds": (
+                round(float(self.timestamp_seconds), 6) if self.timestamp_seconds is not None else None
+            ),
+            "width": self.width,
+            "height": self.height,
+            "persons": [person.to_dict() for person in self.persons],
+        }
+
+
+@dataclass(frozen=True)
+class VideoSummary:
+    input_path: str
+    output_path: str | None
+    jsonl_path: str | None
+    source_fps: float | None
+    source_width: int
+    source_height: int
+    source_frame_count: int | None
+    processed_frames: int
+    skipped_frames: int
+    total_persons: int
+    total_ppe_detections: int
+    elapsed_seconds: float
+    interrupted: bool = False
+
+    @property
+    def average_processing_fps(self) -> float:
+        """Measured processed-frame throughput for this invocation."""
+        return self.processed_frames / self.elapsed_seconds if self.elapsed_seconds > 0 else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "input_path": self.input_path,
+            "output_path": self.output_path,
+            "jsonl_path": self.jsonl_path,
+            "source_fps": self.source_fps,
+            "source_width": self.source_width,
+            "source_height": self.source_height,
+            "source_frame_count": self.source_frame_count,
+            "processed_frames": self.processed_frames,
+            "skipped_frames": self.skipped_frames,
+            "total_persons": self.total_persons,
+            "total_ppe_detections": self.total_ppe_detections,
+            "elapsed_seconds": round(self.elapsed_seconds, 6),
+            "average_processing_fps": round(self.average_processing_fps, 6),
+            "interrupted": self.interrupted,
+        }

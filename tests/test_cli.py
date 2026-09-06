@@ -28,13 +28,14 @@ def test_video_cli_parses_sampling_and_jsonl_options():
         "video", "--input", "input.mp4", "--output", "output.mp4",
         "--person-model", "p.pt", "--ppe-model", "c.pt",
         "--frame-stride", "2", "--start-frame", "3", "--max-frames", "5",
-        "--ppe-batch-size", "8", "--jsonl", "results.jsonl", "--no-render",
+        "--ppe-batch-size", "8", "--jsonl", "results.jsonl", "--no-render", "--track",
     ])
     assert args.command == "video"
     assert (args.frame_stride, args.start_frame, args.max_frames) == (2, 3, 5)
     assert args.ppe_batch_size == 8
     assert args.jsonl == "results.jsonl"
     assert args.no_render
+    assert args.track
 
 
 @pytest.mark.parametrize(("option", "value"), [("--frame-stride", "0"), ("--start-frame", "-1"), ("--max-frames", "0")])
@@ -63,3 +64,4 @@ def test_python_module_video_help(tmp_path):
     )
     assert completed.returncode == 0
     assert "--frame-stride" in completed.stdout
+    assert "--track" in completed.stdout

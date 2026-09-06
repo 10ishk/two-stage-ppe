@@ -16,6 +16,13 @@ def test_hierarchy_and_dynamic_class_name():
     assert payload["persons"][0]["ppe"][0]["bbox"] == [12.0, 15.0, 20.0, 25.0]
 
 
+def test_track_id_is_optional_and_non_breaking():
+    untracked = PersonResult(0, (1, 2, 3, 4), 0.8).to_dict()
+    tracked = PersonResult(0, (1, 2, 3, 4), 0.8, track_id=17).to_dict()
+    assert "track_id" not in untracked
+    assert tracked["track_id"] == 17
+
+
 def test_json_serialization(tmp_path):
     path = sample_result().save_json(tmp_path / "nested" / "result.json")
     payload = json.loads(path.read_text(encoding="utf-8"))

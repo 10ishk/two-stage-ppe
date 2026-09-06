@@ -58,6 +58,36 @@ class PPEPipeline:
         self.ppe_detector = _ppe_detector or UltralyticsDetector(ppe_model)
         self.person_class_id = self._resolve_person_class(person_class)
 
+    @classmethod
+    def from_project(cls, project: str | Path, **overrides: object) -> "PPEPipeline":
+        """Load model paths and inference defaults from a training project manifest."""
+        manifest_path = Path(project)
+        if manifest_path.is_dir():
+            manifest_path = manifest_path / "project.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(manifest_path)
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        models = payload.get("models", {})
+        if not models.get("person") or not models.get("ppe"):
+            raise ValueError("Project manifest does not contain both trained model paths")
+        root = manifest_path.parent
+        person_model, ppe_model = root / models["person"], root / models["ppe"]
+        if not person_model.is_file() or not ppe_model.is_file():
+            raise FileNotFoundError("One or more project model files are missing")
+        parent_mapping = payload.get("classes", {}).get("parent", {})
+        if not parent_mapping:
+            raise ValueError("Project manifest does not contain a parent class")
+        inference = payload.get("inference", {})
+        options: dict[str, object] = {
+            "person_conf": inference.get("person_conf", 0.25),
+            "ppe_conf": inference.get("ppe_conf", 0.25),
+            "crop_padding": inference.get("crop_padding", 0.05),
+            "iou": inference.get("iou", 0.45),
+            "person_class": next(iter(parent_mapping.values())),
+        }
+        options.update(overrides)
+        return cls(person_model, ppe_model, **options)
+
     def _resolve_person_class(self, selector: str | int) -> int:
         names = self.person_detector.class_names
         if isinstance(selector, int) or (isinstance(selector, str) and selector.strip().isdigit()):

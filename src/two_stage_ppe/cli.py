@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from collections.abc import Sequence
 
@@ -79,6 +80,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     video.add_argument("--no-render", action="store_true", help="Write frames without annotations")
     video.add_argument("--track", action="store_true", help="Assign persistent ByteTrack IDs to persons")
+
+    train = subparsers.add_parser("train", help="Prepare data and train both detector stages")
+    train.add_argument("--dataset", required=True, help="Pascal VOC dataset root")
+    train.add_argument("--output", required=True, help="New training project directory")
+    train.add_argument("--parent-class", required=True)
+    train.add_argument("--child-classes", nargs="+", required=True)
+    train.add_argument("--person-model", default="yolo11n.pt")
+    train.add_argument("--ppe-model", default="yolo11n.pt")
+    train.add_argument("--person-epochs", type=positive_int, default=100)
+    train.add_argument("--ppe-epochs", type=positive_int, default=100)
+    train.add_argument("--imgsz", type=positive_int, default=640)
+    train.add_argument("--person-batch", type=positive_int, default=16)
+    train.add_argument("--ppe-batch", type=positive_int, default=16)
+    train.add_argument("--device")
+    train.add_argument("--seed", type=int, default=42)
+    train.add_argument("--padding", type=float, default=0.05)
+    train.add_argument("--ioa-threshold", type=float, default=0.50)
+    train.add_argument("--train-ratio", type=float, default=0.80)
+    train.add_argument("--val-ratio", type=float, default=0.10)
+    train.add_argument("--test-ratio", type=float, default=0.10)
+    train.add_argument("--patience", type=positive_int, default=50)
+    train.add_argument("--workers", type=non_negative_int, default=8)
+    train.add_argument("--calibrate-thresholds", action="store_true")
+    train.add_argument("--prepare-only", action="store_true")
+    train.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -92,6 +118,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.input, args.output, save_images=not args.no_images, save_json=args.save_json
         )
         logging.info("Processed %d image(s)", len(results))
+        return 0
+
+    if args.command == "train":
+        from .training import TrainingConfig, train_two_stage
+
+        config = TrainingConfig(
+            dataset=args.dataset,
+            output=args.output,
+            parent_class=args.parent_class,
+            child_classes=args.child_classes,
+            person_model=args.person_model,
+            ppe_model=args.ppe_model,
+            person_epochs=args.person_epochs,
+            ppe_epochs=args.ppe_epochs,
+            imgsz=args.imgsz,
+            person_batch=args.person_batch,
+            ppe_batch=args.ppe_batch,
+            device=args.device,
+            seed=args.seed,
+            padding=args.padding,
+            ioa_threshold=args.ioa_threshold,
+            train_ratio=args.train_ratio,
+            val_ratio=args.val_ratio,
+            test_ratio=args.test_ratio,
+            patience=args.patience,
+            workers=args.workers,
+            calibrate_thresholds=args.calibrate_thresholds,
+            prepare_only=args.prepare_only,
+            dry_run=args.dry_run,
+        )
+        result = train_two_stage(config)
+        print(json.dumps(result.to_dict(), indent=2))
         return 0
 
     if args.output is None and args.jsonl is None:

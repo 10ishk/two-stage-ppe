@@ -9,6 +9,13 @@ from collections.abc import Sequence
 from .pipeline import PPEPipeline
 
 
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="two-stage-ppe", description="Two-stage person-to-PPE detection")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -23,6 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
     detect.add_argument("--crop-padding", type=float, default=0.05)
     detect.add_argument("--device")
     detect.add_argument("--person-class", default="person", help="Person class name or numeric class ID")
+    detect.add_argument(
+        "--ppe-batch-size",
+        type=positive_int,
+        help="Maximum PPE crops per backend call; defaults to all crops in each image",
+    )
     detect.add_argument("--save-json", action="store_true", help="Write one JSON file per image")
     detect.add_argument("--no-images", action="store_true", help="Do not write annotated images")
     return parser
@@ -42,8 +54,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         crop_padding=args.crop_padding,
         device=args.device,
         person_class=args.person_class,
+        ppe_batch_size=args.ppe_batch_size,
     )
     results = pipeline.process(args.input, args.output, save_images=not args.no_images, save_json=args.save_json)
     logging.info("Processed %d image(s)", len(results))
     return 0
-

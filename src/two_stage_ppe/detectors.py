@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Mapping, Protocol
 
 import numpy as np
@@ -15,6 +16,10 @@ class Detector(Protocol):
     def class_names(self) -> Mapping[int, str]: ...
 
     def predict(self, image: np.ndarray, *, conf: float, iou: float, device: str | None) -> list[Detection]: ...
+
+    def predict_batch(
+        self, images: Sequence[np.ndarray], *, conf: float, iou: float, device: str | None
+    ) -> list[list[Detection]]: ...
 
 
 class UltralyticsDetector:
@@ -37,14 +42,8 @@ class UltralyticsDetector:
             return {int(key): str(value) for key, value in names.items()}
         return {index: str(value) for index, value in enumerate(names)}
 
-    def predict(self, image: np.ndarray, *, conf: float, iou: float, device: str | None) -> list[Detection]:
-        kwargs: dict[str, Any] = {"source": image, "conf": conf, "iou": iou, "verbose": False}
-        if device is not None:
-            kwargs["device"] = device
-        outputs = self._model.predict(**kwargs)
-        if not outputs:
-            return []
-        boxes = getattr(outputs[0], "boxes", None)
+    def _normalize(self, output: Any) -> list[Detection]:
+        boxes = getattr(output, "boxes", None)
         if boxes is None or len(boxes) == 0:
             return []
         names = self.class_names
@@ -55,4 +54,23 @@ class UltralyticsDetector:
             Detection(int(class_id), names.get(int(class_id), str(class_id)), as_box(box), float(score))
             for box, score, class_id in zip(xyxy, confidences, classes)
         ]
+
+    def predict_batch(
+        self, images: Sequence[np.ndarray], *, conf: float, iou: float, device: str | None
+    ) -> list[list[Detection]]:
+        """Predict an ordered image batch with exactly one result collection per input."""
+        if not images:
+            return []
+        kwargs: dict[str, Any] = {"source": list(images), "conf": conf, "iou": iou, "verbose": False}
+        if device is not None:
+            kwargs["device"] = device
+        outputs = list(self._model.predict(**kwargs))
+        if len(outputs) != len(images):
+            raise RuntimeError(
+                f"Detector returned {len(outputs)} result collections for {len(images)} input images"
+            )
+        return [self._normalize(output) for output in outputs]
+
+    def predict(self, image: np.ndarray, *, conf: float, iou: float, device: str | None) -> list[Detection]:
+        return self.predict_batch([image], conf=conf, iou=iou, device=device)[0]
 

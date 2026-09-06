@@ -12,6 +12,7 @@ class PipelineConfig:
     crop_padding: float = 0.05
     device: str | None = None
     person_class: Union[str, int] = "person"
+    ppe_batch_size: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("person_conf", "ppe_conf", "iou"):
@@ -20,4 +21,7 @@ class PipelineConfig:
                 raise ValueError(f"{name} must be between 0 and 1")
         if self.crop_padding < 0.0:
             raise ValueError("crop_padding must be non-negative")
+        if self.ppe_batch_size is not None:
+            if isinstance(self.ppe_batch_size, bool) or self.ppe_batch_size <= 0:
+                raise ValueError("ppe_batch_size must be a positive integer or None")
 

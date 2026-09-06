@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 import math
 from pathlib import Path
-from typing import Iterable
-
 import cv2
+import numpy as np
 
 from .config import PipelineConfig
 from .detectors import Detector, UltralyticsDetector
@@ -43,10 +42,13 @@ class PPEPipeline:
         crop_padding: float = 0.05,
         device: str | None = None,
         person_class: str | int = "person",
+        ppe_batch_size: int | None = None,
         _person_detector: Detector | None = None,
         _ppe_detector: Detector | None = None,
     ) -> None:
-        self.config = PipelineConfig(person_conf, ppe_conf, iou, crop_padding, device, person_class)
+        self.config = PipelineConfig(
+            person_conf, ppe_conf, iou, crop_padding, device, person_class, ppe_batch_size
+        )
         self.person_detector = _person_detector or UltralyticsDetector(person_model)
         self.ppe_detector = _ppe_detector or UltralyticsDetector(ppe_model)
         self.person_class_id = self._resolve_person_class(person_class)
@@ -73,9 +75,9 @@ class PPEPipeline:
             frame, conf=self.config.person_conf, iou=self.config.iou, device=self.config.device
         )
         people: list[PersonResult] = []
-        for detection in parents:
-            if detection.class_id != self.person_class_id:
-                continue
+        crop_work: list[tuple[PersonResult, tuple[int, int], np.ndarray]] = []
+        matched_parents = [detection for detection in parents if detection.class_id == self.person_class_id]
+        for person_id, detection in enumerate(matched_parents):
             person_box = clip_box(detection.bbox, width, height)
             crop_box = expand_box(person_box, self.config.crop_padding, width, height)
             left, top = math.floor(crop_box[0]), math.floor(crop_box[1])
@@ -84,16 +86,33 @@ class PPEPipeline:
                 LOGGER.warning("Skipping degenerate person crop in %s", source)
                 continue
             crop = frame[top:bottom, left:right]
-            children = self.ppe_detector.predict(
-                crop, conf=self.config.ppe_conf, iou=self.config.iou, device=self.config.device
+            person = PersonResult(person_id, person_box, detection.confidence)
+            people.append(person)
+            crop_work.append((person, (left, top), crop))
+
+        batch_size = self.config.ppe_batch_size or len(crop_work)
+        for start in range(0, len(crop_work), batch_size or 1):
+            work_chunk = crop_work[start : start + batch_size]
+            child_batches = self.ppe_detector.predict_batch(
+                [work[2] for work in work_chunk],
+                conf=self.config.ppe_conf,
+                iou=self.config.iou,
+                device=self.config.device,
             )
-            mapped: list[Detection] = []
-            for child in children:
-                global_box = clip_box(crop_to_global(child.bbox, (left, top)), width, height)
-                if valid_box(global_box):
-                    mapped.append(Detection(child.class_id, child.class_name, global_box, child.confidence))
-            people.append(PersonResult(len(people), person_box, detection.confidence, mapped))
+            if len(child_batches) != len(work_chunk):
+                raise RuntimeError(
+                    f"PPE detector returned {len(child_batches)} result collections "
+                    f"for {len(work_chunk)} person crops"
+                )
+            for (person, origin, _crop), children in zip(work_chunk, child_batches):
+                for child in children:
+                    global_box = clip_box(crop_to_global(child.bbox, origin), width, height)
+                    if valid_box(global_box):
+                        person.ppe.append(
+                            Detection(child.class_id, child.class_name, global_box, child.confidence)
+                        )
         return ImageResult(source.name, width, height, people, source.resolve())
+
 
     def predict_many(self, source: str | Path) -> list[ImageResult]:
         return [self.predict(path) for path in image_paths(source)]
@@ -116,4 +135,3 @@ class PPEPipeline:
             if save_json:
                 result.save_json(destination / f"{stem}.json")
         return results
-

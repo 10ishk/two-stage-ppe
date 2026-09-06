@@ -9,7 +9,7 @@ import pytest
 from two_stage_ppe import PPEPipeline
 from two_stage_ppe.cli import build_parser
 from two_stage_ppe.dataset import audit_voc_dataset, deterministic_split, prepare_voc_dataset
-from two_stage_ppe.training import StageOutcome, TrainingConfig, train_two_stage
+from two_stage_ppe.training import StageOutcome, TrainingConfig, TrainingStage, plan_resume, train_two_stage
 
 
 def write_xml(path: Path, objects, width=100, height=100):
@@ -142,7 +142,7 @@ def test_full_orchestrator_order_datasets_weights_and_manifest(tmp_path):
     assert "child_dataset" in str(trainer.calls[2][2])
     assert Path(result.person_weight_path).read_bytes() == b"fake-person"
     assert Path(result.ppe_weight_path).read_bytes() == b"fake-ppe"
-    assert result.stages == ["dataset_audit", "prepared", "person_trained", "ppe_trained", "validated"]
+    assert result.stages == ["dataset_audit", "prepared", "person_trained", "person_validated", "ppe_trained", "ppe_validated", "completed"]
     manifest = json.loads((tmp_path / "run" / "project.json").read_text())
     assert manifest["status"] == "completed"
     assert Path(manifest["models"]["person"]).as_posix() == "weights/person_best.pt"
@@ -157,7 +157,7 @@ def test_ppe_failure_preserves_person_artifacts_and_context(tmp_path):
     assert (tmp_path / "run" / "weights" / "person_best.pt").is_file()
     manifest = json.loads((tmp_path / "run" / "project.json").read_text())
     assert manifest["status"] == "failed"
-    assert manifest["failure"]["stage"] == "ppe_training"
+    assert manifest["failure"]["stage"] == "ppe_trained"
 
 
 def test_prepare_only_never_calls_trainer(tmp_path):
@@ -197,7 +197,7 @@ def test_calibration_receives_validation_split_and_updates_manifest(tmp_path):
 
     result = train_two_stage(config(dataset, tmp_path / "run", calibrate_thresholds=True), trainer=FakeTrainer(), calibrator=calibrator)
     manifest = json.loads((tmp_path / "run" / "project.json").read_text())
-    assert result.stages[-1] == "calibrated"
+    assert result.stages[-2] == "calibrated"
     assert observed["val"] and set(observed["val"]).isdisjoint(observed["test"])
     assert manifest["inference"]["person_conf"] == 0.35
     assert (tmp_path / "run" / "metrics" / "calibration.json").is_file()
@@ -222,8 +222,120 @@ def test_from_project_loads_relative_models_and_settings(tmp_path):
 
 
 def test_train_cli_parsing():
-    args = build_parser().parse_args(["train", "--dataset", "data", "--output", "run", "--parent-class", "worker", "--child-classes", "helmet", "vest", "--person-model", "small.pt", "--ppe-model", "medium.pt", "--person-epochs", "5", "--ppe-epochs", "7", "--prepare-only", "--dry-run"])
+    args = build_parser().parse_args(["train", "--dataset", "data", "--output", "run", "--parent-class", "worker", "--child-classes", "helmet", "vest", "--person-model", "small.pt", "--ppe-model", "medium.pt", "--person-epochs", "5", "--ppe-epochs", "7", "--prepare-only", "--dry-run", "--resume", "--restart-from", "ppe_train"])
     assert args.command == "train"
     assert args.child_classes == ["helmet", "vest"]
     assert (args.person_epochs, args.ppe_epochs) == (5, 7)
     assert args.prepare_only and args.dry_run
+    assert args.resume and args.restart_from == "ppe_train"
+
+
+def test_complete_resume_is_idempotent(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    train_two_stage(config(dataset, run), trainer=FakeTrainer())
+    trainer = FakeTrainer()
+    result = train_two_stage(config(dataset, run), trainer=trainer, resume=True)
+    assert trainer.calls == []
+    assert result.resumed and "completed" in result.reused_stages
+    assert result.failure is None
+
+
+def test_resume_after_ppe_failure_runs_only_ppe_and_validation(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    with pytest.raises(RuntimeError):
+        train_two_stage(config(dataset, run), trainer=FakeTrainer(fail_stage="ppe"))
+    trainer = FakeTrainer()
+    result = train_two_stage(config(dataset, run), trainer=trainer, resume=True)
+    assert [(kind, stage) for kind, stage, _ in trainer.calls] == [("train", "ppe"), ("validate", "ppe")]
+    assert result.status == "completed" and result.failure is None
+
+
+@pytest.mark.parametrize("missing,expected", [("person_best.pt", ["person", "person"]), ("ppe_best.pt", ["ppe", "ppe"])])
+def test_missing_checkpoint_invalidates_model_and_dependents(tmp_path, missing, expected):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    train_two_stage(config(dataset, run), trainer=FakeTrainer())
+    (run / "weights" / missing).unlink()
+    trainer = FakeTrainer()
+    train_two_stage(config(dataset, run), trainer=trainer, resume=True)
+    assert [stage for _, stage, _ in trainer.calls] == expected
+
+
+def test_padding_change_reprepares_and_retrains_only_ppe(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    train_two_stage(config(dataset, run), trainer=FakeTrainer())
+    trainer = FakeTrainer()
+    result = train_two_stage(config(dataset, run, padding=0.1), trainer=trainer, resume=True)
+    assert [stage for _, stage, _ in trainer.calls] == ["ppe", "ppe"]
+    assert "prepared" in result.executed_stages and "person_trained" in result.reused_stages
+
+
+def test_person_epochs_change_invalidates_person_not_ppe(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    train_two_stage(config(dataset, run), trainer=FakeTrainer())
+    trainer = FakeTrainer()
+    train_two_stage(config(dataset, run, person_epochs=2), trainer=trainer, resume=True)
+    assert [stage for _, stage, _ in trainer.calls] == ["person", "person"]
+
+
+def test_calibration_candidates_change_only_reruns_calibration(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    calibrator = lambda *args: {"split": "val", "selected": {"person_conf": 0.25, "ppe_conf": 0.25}}
+    train_two_stage(config(dataset, run, calibrate_thresholds=True), trainer=FakeTrainer(), calibrator=calibrator)
+    trainer = FakeTrainer()
+    calls = []
+    changed = config(dataset, run, calibrate_thresholds=True, calibration_candidates=(0.2, 0.4))
+    train_two_stage(changed, trainer=trainer, calibrator=lambda *args: calls.append("calibration") or calibrator(), resume=True)
+    assert trainer.calls == [] and calls == ["calibration"]
+
+
+def test_dataset_change_invalidates_preparation_and_models(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    train_two_stage(config(dataset, run), trainer=FakeTrainer())
+    write_xml(dataset / "annotations/image_00.xml", [("worker", (10, 10, 90, 95)), ("helmet", (20, 20, 30, 35)), ("vest", (40, 40, 60, 70))])
+    trainer = FakeTrainer()
+    result = train_two_stage(config(dataset, run), trainer=trainer, resume=True)
+    assert "prepared" in result.executed_stages
+    assert [stage for _, stage, _ in trainer.calls] == ["person", "person", "ppe", "ppe"]
+
+
+def test_resume_dry_run_returns_plan_without_writes(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    train_two_stage(config(dataset, run), trainer=FakeTrainer())
+    before = (run / "project.json").read_bytes()
+    trainer = FakeTrainer()
+    result = train_two_stage(config(dataset, run, dry_run=True), trainer=trainer, resume=True, restart_from="ppe_train")
+    assert trainer.calls == [] and (run / "project.json").read_bytes() == before
+    assert "ppe_trained" in result.resume_plan["run"]
+
+
+def test_restart_from_ppe_train_reuses_person(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    train_two_stage(config(dataset, run), trainer=FakeTrainer())
+    trainer = FakeTrainer()
+    train_two_stage(config(dataset, run), trainer=trainer, resume=True, restart_from="ppe_train")
+    assert [stage for _, stage, _ in trainer.calls] == ["ppe", "ppe"]
+
+
+def test_v05_manifest_still_loads_and_incomplete_v2_is_clear(tmp_path):
+    project = tmp_path / "run"
+    (project / "weights").mkdir(parents=True)
+    (project / "weights/person_best.pt").write_bytes(b"person")
+    (project / "weights/ppe_best.pt").write_bytes(b"ppe")
+    old = {"models": {"person": "weights/person_best.pt", "ppe": "weights/ppe_best.pt"}, "classes": {"parent": {"0": "worker"}}, "inference": {}}
+    (project / "project.json").write_text(json.dumps(old))
+    PPEPipeline.from_project(project, _person_detector=Detector(), _ppe_detector=Detector())
+    old["schema_version"] = 2
+    old["status"] = "failed"
+    old["failure"] = {"stage": "ppe_trained"}
+    (project / "project.json").write_text(json.dumps(old))
+    with pytest.raises(ValueError, match="incomplete.*ppe_trained"):
+        PPEPipeline.from_project(project, _person_detector=Detector(), _ppe_detector=Detector())

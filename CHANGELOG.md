@@ -2,6 +2,14 @@
 
 All notable changes are documented here.
 
+## 0.5.0
+
+- Add end-to-end two-stage Ultralytics training orchestration.
+- Add Pascal VOC dataset auditing and leakage-safe parent/child preparation.
+- Organize person and PPE best checkpoints with validation metrics and failure status.
+- Add structured training results, project manifests, dry runs, and prepare-only mode.
+- Add optional validation-only confidence calibration and project-based inference loading.
+
 ## 0.4.0
 
 - Add optional persistent worker tracking with an isolated ByteTrack adapter.

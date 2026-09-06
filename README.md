@@ -2,7 +2,7 @@
 
 An open-source framework for detecting people first, then detecting PPE inside person crops while preserving ownership and full-image coordinates.
 
-> **Status:** v0.4.0. The initial backend is Ultralytics YOLO. Checkpoints, datasets, and sample predictions are intentionally not distributed.
+> **Status:** v0.5.0. The initial backend is Ultralytics YOLO. Checkpoints, datasets, and sample predictions are intentionally not distributed.
 
 ## Architecture
 
@@ -32,6 +32,7 @@ python -m pip install -e ".[yolo]"
 ```
 
 Install optional worker tracking support with `python -m pip install -e ".[yolo,tracking]"`.
+Install training support with `python -m pip install -e ".[training]"`.
 
 Bring compatible Ultralytics checkpoints: one with a person-like class and one trained for the PPE classes relevant to your application. No checkpoints are bundled.
 
@@ -162,6 +163,41 @@ With `frame_stride > 1`, the tracker updates only on processed frames. Skipped f
 
 Tracking is motion/overlap-based association, not person re-identification. IDs can change after long occlusion, detector misses, crowded crossings, or tracker loss. Tracking does not implement PPE compliance rules, PPE history, or cross-frame PPE smoothing.
 
+## Train a complete two-stage PPE system
+
+The optional training layer audits Pascal VOC data, splits source images before creating crops, prepares parent and child datasets, trains and validates both Ultralytics models, and writes a reusable project manifest.
+
+```bash
+two-stage-ppe train \
+  --dataset dataset/ \
+  --output runs/my_project \
+  --parent-class person \
+  --child-classes helmet gloves boots vest \
+  --person-model yolo11n.pt \
+  --ppe-model yolo11n.pt
+```
+
+Use `--dry-run` to audit and resolve the plan without creating files or invoking a trainer. Use `--prepare-only` to stop after leakage-safe parent and child dataset generation. `--calibrate-thresholds` caches low-threshold predictions from the validation split only and stores the selected operating point; test data is never used for calibration.
+
+```python
+from two_stage_ppe import PPEPipeline, TrainingConfig, train_two_stage
+
+result = train_two_stage(TrainingConfig(
+    dataset="dataset/",
+    output="runs/my_project",
+    parent_class="person",
+    child_classes=["helmet", "gloves", "boots", "vest"],
+    person_model="yolo11n.pt",
+    ppe_model="yolo11n.pt",
+))
+
+pipeline = PPEPipeline.from_project("runs/my_project/project.json")
+```
+
+The generated project contains prepared data, organized best checkpoints, Ultralytics logs, validation metrics, a structured training summary, and `project.json`. If the PPE stage fails, the prepared data, completed person checkpoint, metadata, and failure context remain available. See [docs/training.md](docs/training.md) for the complete contract.
+
+Training orchestration does not guarantee model quality. Results depend on label correctness, class coverage, source diversity, base checkpoints, hyperparameters, hardware, and available training time.
+
 ## JSON result
 
 ```json
@@ -227,16 +263,16 @@ tests/               Weight-free unit and synthetic integration tests
 
 ## Limitations
 
-- Ultralytics YOLO is the only inference backend in v0.4.0.
+- Ultralytics YOLO is the only inference and training backend in v0.5.0.
 - PPE crops are batched independently for each image or processed video frame.
 - Worker tracking is optional and does not provide biometric re-identification or guaranteed identity persistence.
 - Cross-person duplicate suppression is not performed.
 - Accuracy and latency depend on user-provided checkpoints, data, hardware, thresholds, and scene density.
-- Live streams, PPE history/smoothing, deployment exports, and web interfaces are outside the v0.4.0 scope.
+- Training resume, hyperparameter search, live streams, PPE history/smoothing, deployment exports, and web interfaces are outside the v0.5.0 scope.
 
 ## Roadmap
 
-- Optional cross-frame PPE smoothing with explicit uncertainty and no compliance policy
+- Stage-aware training resume with manifest-verified artifact reuse
 - Optional cross-person duplicate analysis
 - Video and tracking support
 - Export/runtime adapters after the core API stabilizes

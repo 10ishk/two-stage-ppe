@@ -1,0 +1,18 @@
+dataset: dataset/
+output: runs/my_project
+parent_class: person
+child_classes: [helmet, gloves, boots, vest]
+person_model: yolo11n.pt
+ppe_model: yolo11n.pt
+person_epochs: 100
+ppe_epochs: 100
+imgsz: 640
+person_batch: 16
+ppe_batch: 16
+seed: 42
+padding: 0.05
+ioa_threshold: 0.50
+train_ratio: 0.80
+val_ratio: 0.10
+test_ratio: 0.10
+

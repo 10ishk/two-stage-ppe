@@ -273,6 +273,16 @@ def test_padding_change_reprepares_and_retrains_only_ppe(tmp_path):
     assert "prepared" in result.executed_stages and "person_trained" in result.reused_stages
 
 
+def test_child_class_change_reprepares_ppe_but_reuses_person(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    train_two_stage(config(dataset, run), trainer=FakeTrainer())
+    trainer = FakeTrainer()
+    result = train_two_stage(config(dataset, run, child_classes=["vest", "helmet"]), trainer=trainer, resume=True)
+    assert [stage for _, stage, _ in trainer.calls] == ["ppe", "ppe"]
+    assert "prepared" in result.executed_stages and "person_trained" in result.reused_stages
+
+
 def test_person_epochs_change_invalidates_person_not_ppe(tmp_path):
     dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
     run = tmp_path / "run"
@@ -280,6 +290,17 @@ def test_person_epochs_change_invalidates_person_not_ppe(tmp_path):
     trainer = FakeTrainer()
     train_two_stage(config(dataset, run, person_epochs=2), trainer=trainer, resume=True)
     assert [stage for _, stage, _ in trainer.calls] == ["person", "person"]
+
+
+def test_failed_person_restart_preserves_independent_ppe_state(tmp_path):
+    dataset = make_dataset(tmp_path / "data", children=("helmet", "vest"))
+    run = tmp_path / "run"
+    train_two_stage(config(dataset, run), trainer=FakeTrainer())
+    with pytest.raises(RuntimeError, match="person failed"):
+        train_two_stage(config(dataset, run, person_epochs=2), trainer=FakeTrainer(fail_stage="person"), resume=True)
+    manifest = json.loads((run / "project.json").read_text())
+    assert "ppe_trained" in manifest["completed_stages"]
+    assert (run / "weights/ppe_best.pt").is_file()
 
 
 def test_calibration_candidates_change_only_reruns_calibration(tmp_path):

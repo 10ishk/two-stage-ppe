@@ -444,6 +444,11 @@ def train_two_stage(config: TrainingConfig, *, trainer: TrainingAdapter | None =
     result.ppe_validation_metrics = previous.get("ppe_validation_metrics", {})
     result.training_durations = previous.get("training_durations", {})
     result.calibration = previous.get("calibration")
+    if TrainingStage.PERSON_TRAINED.value in plan.reuse:
+        result.person_weight_path = str(project / "weights/person_best.pt")
+    if TrainingStage.PPE_TRAINED.value in plan.reuse:
+        result.ppe_weight_path = str(project / "weights/ppe_best.pt")
+    result.stages = [stage for stage in STAGE_ORDER if stage in plan.reuse and stage != TrainingStage.COMPLETE.value]
     current_stage = TrainingStage.PREPARED.value
     try:
         if TrainingStage.PREPARED.value in plan.reuse:
@@ -525,5 +530,7 @@ def train_two_stage(config: TrainingConfig, *, trainer: TrainingAdapter | None =
     except Exception as exc:
         result.status = "failed"
         result.failure = {"stage": current_stage, "type": type(exc).__name__, "message": str(exc)}
+        completed = set(result.stages) | (set(plan.reuse) - {TrainingStage.COMPLETE.value})
+        result.stages = [stage for stage in STAGE_ORDER if stage in completed]
         _write_project_files(result, config, fingerprints)
         raise

@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "two-stage-ppe"
+version = "0.1.0"
+description = "Reusable person-to-PPE detection with crop-based inference and global coordinate remapping."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Apache-2.0"}
+authors = [{name = "two-stage-ppe contributors"}]
+keywords = ["computer-vision", "ppe", "object-detection", "yolo"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = ["numpy>=1.23", "opencv-python>=4.8"]
+
+[project.optional-dependencies]
+yolo = ["ultralytics>=8.3,<9"]
+test = ["pytest>=7.4"]
+
+[project.scripts]
+two-stage-ppe = "two_stage_ppe.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/10ishk/two-stage-ppe"
+Issues = "https://github.com/10ishk/two-stage-ppe/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+

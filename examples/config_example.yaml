@@ -1,0 +1,9 @@
+person_model: person.pt
+ppe_model: ppe.pt
+person_class: person
+person_conf: 0.30
+ppe_conf: 0.30
+iou: 0.45
+crop_padding: 0.05
+device: null
+

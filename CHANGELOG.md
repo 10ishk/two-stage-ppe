@@ -2,6 +2,14 @@
 
 All notable changes are documented here.
 
+## 0.4.0
+
+- Add optional persistent worker tracking with an isolated ByteTrack adapter.
+- Add `track_id` to tracked video person results while retaining frame-local `id` semantics.
+- Render persistent IDs on person labels and stream them through JSONL output.
+- Reset default tracker state between video calls and expose lightweight track counts.
+- Preserve backward-compatible non-tracked image, directory, video, and PPE result behavior.
+
 ## 0.3.0
 
 - Add incremental video inference without loading complete videos into memory.

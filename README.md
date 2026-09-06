@@ -2,7 +2,7 @@
 
 An open-source framework for detecting people first, then detecting PPE inside person crops while preserving ownership and full-image coordinates.
 
-> **Status:** v0.3.0. The initial backend is Ultralytics YOLO. Checkpoints, datasets, and sample predictions are intentionally not distributed.
+> **Status:** v0.4.0. The initial backend is Ultralytics YOLO. Checkpoints, datasets, and sample predictions are intentionally not distributed.
 
 ## Architecture
 
@@ -30,6 +30,8 @@ git clone https://github.com/10ishk/two-stage-ppe.git
 cd two-stage-ppe
 python -m pip install -e ".[yolo]"
 ```
+
+Install optional worker tracking support with `python -m pip install -e ".[yolo,tracking]"`.
 
 Bring compatible Ultralytics checkpoints: one with a person-like class and one trained for the PPE classes relevant to your application. No checkpoints are bundled.
 
@@ -118,7 +120,47 @@ print(summary.to_dict())
 
 JSONL output writes one object immediately after each processed frame, so long videos do not accumulate structured results in memory. A `frame_callback` can consume the same `FrameResult` stream in Python. Container and codec availability depends on the local OpenCV build.
 
-**V0.3 does not perform tracking. Person IDs are frame-local:** person `0` in one frame is not guaranteed to represent the same real person as person `0` in another frame.
+Without optional tracking, person IDs are frame-local: person `0` in one frame is not guaranteed to represent the same real person as person `0` in another frame.
+
+## Worker tracking
+
+V0.4 can optionally track detected persons with ByteTrack. The existing `id` remains the frame-local result index; `track_id` is an additional persistent video identity while the tracker maintains association. PPE detections are not tracked independently—they remain frame-local observations attached to the corresponding tracked person.
+
+```bash
+two-stage-ppe video \
+  --input input.mp4 \
+  --output output.mp4 \
+  --person-model person.pt \
+  --ppe-model ppe.pt \
+  --track \
+  --jsonl tracked.jsonl
+```
+
+```python
+pipeline = PPEPipeline("person.pt", "ppe.pt", ppe_batch_size=8)
+summary = pipeline.predict_video(
+    "input.mp4",
+    output_path="output.mp4",
+    save_json=True,
+    tracking=True,
+)
+```
+
+Tracked person labels render as `person #17 0.91`, while PPE labels remain unchanged. Tracked JSONL persons include both fields:
+
+```json
+{
+  "id": 0,
+  "track_id": 17,
+  "bbox": [120.0, 80.0, 420.0, 690.0],
+  "confidence": 0.94,
+  "ppe": []
+}
+```
+
+With `frame_stride > 1`, the tracker updates only on processed frames. Skipped frames stay unannotated, and stale tracks or PPE are never drawn onto them. Every normal `predict_video(..., tracking=True)` call creates fresh tracker state; advanced callers may instead pass an externally managed `PersonTracker` instance.
+
+Tracking is motion/overlap-based association, not person re-identification. IDs can change after long occlusion, detector misses, crowded crossings, or tracker loss. Tracking does not implement PPE compliance rules, PPE history, or cross-frame PPE smoothing.
 
 ## JSON result
 
@@ -185,16 +227,16 @@ tests/               Weight-free unit and synthetic integration tests
 
 ## Limitations
 
-- Ultralytics YOLO is the only inference backend in v0.3.0.
+- Ultralytics YOLO is the only inference backend in v0.4.0.
 - PPE crops are batched independently for each image or processed video frame.
-- Video identity is frame-local; tracking and cross-frame smoothing are not performed.
+- Worker tracking is optional and does not provide biometric re-identification or guaranteed identity persistence.
 - Cross-person duplicate suppression is not performed.
 - Accuracy and latency depend on user-provided checkpoints, data, hardware, thresholds, and scene density.
-- Live streams, tracking, deployment exports, and web interfaces are outside the v0.3.0 scope.
+- Live streams, PPE history/smoothing, deployment exports, and web interfaces are outside the v0.4.0 scope.
 
 ## Roadmap
 
-- Optional tracking with explicit persistent-identity result types
+- Optional cross-frame PPE smoothing with explicit uncertainty and no compliance policy
 - Optional cross-person duplicate analysis
 - Video and tracking support
 - Export/runtime adapters after the core API stabilizes

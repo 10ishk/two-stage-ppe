@@ -228,6 +228,18 @@ result = pipeline.predict("image.jpg", compliance_policy=policy)
 
 Each person is marked `compliant`, `non_compliant` with required classes in `missing`, or `unknown` when the policy cannot be evaluated safely against the PPE model. Policies can also evaluate existing results independently. JSON/JSONL adds compliance only when a policy is active; tracked video evaluates each processed frame without history or smoothing. See [compliance documentation](docs/compliance.md).
 
+## Export and share a trained project
+
+Move a completed project between machines without datasets or training logs:
+
+```bash
+two-stage-ppe export --project runs/site/project.json --output site.tsppe.zip
+two-stage-ppe verify site.tsppe.zip
+two-stage-ppe import site.tsppe.zip --output projects/site
+```
+
+The bundle contains portable project metadata, both required weights, SHA256 inventory data, and an explicitly referenced policy when present. Imported projects load normally with `PPEPipeline.from_project("projects/site/project.json")`. Integrity verification detects corruption and unsafe archives before extraction; it is not a publisher-authenticity signature. See [bundle documentation](docs/bundles.md).
+
 The generated project contains prepared data, organized best checkpoints, Ultralytics logs, validation metrics, a structured training summary, and `project.json`. If the PPE stage fails, the prepared data, completed person checkpoint, metadata, and failure context remain available. See [docs/training.md](docs/training.md) for the complete contract.
 
 Training orchestration does not guarantee model quality. Results depend on label correctness, class coverage, source diversity, base checkpoints, hyperparameters, hardware, and available training time.
@@ -306,7 +318,7 @@ tests/               Weight-free unit and synthetic integration tests
 
 ## Roadmap
 
-- Project inspection and portable training-project bundles
+- Optional release artifact builds (wheel and source distribution)
 - Multiple-policy and zone-aware compliance routing
 - Optional cross-person duplicate analysis
 - Video and tracking support

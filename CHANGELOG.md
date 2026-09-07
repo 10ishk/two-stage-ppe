@@ -2,6 +2,13 @@
 
 All notable changes are documented here.
 
+## 0.8.0
+
+- Add portable, inference-only trained-project ZIP bundles.
+- Add export, inspect, verify, and safe import CLI/API workflows.
+- Add SHA256 inventory verification, archive path validation, and cross-machine relative model paths.
+- Support explicitly referenced compliance policy files in bundles.
+
 ## 0.7.0
 
 - Add configurable PPE compliance policies with structured observed/missing results.

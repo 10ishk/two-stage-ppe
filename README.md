@@ -209,6 +209,25 @@ two-stage-ppe train \
 
 The planner verifies manifest fingerprints and expected artifacts before reuse. Add `--dry-run` to inspect its `reuse`/`run` plan without changing files, or `--restart-from ppe_train` to rerun PPE training and downstream stages deliberately. Resume does not continue within an interrupted Ultralytics epoch; an incomplete training stage starts again.
 
+## PPE compliance policies
+
+An optional policy layer reports detector-observed PPE requirements; it does **not** guarantee real-world compliance. One policy defines exact required PPE model class names for an inference run:
+
+```bash
+two-stage-ppe detect --input image.jpg --output output \
+  --person-model person.pt --ppe-model ppe.pt \
+  --policy examples/compliance_policy.yaml --save-json
+```
+
+```python
+from two_stage_ppe import CompliancePolicy
+
+policy = CompliancePolicy(name="site-default", required=["hard-hat", "vest", "boots"])
+result = pipeline.predict("image.jpg", compliance_policy=policy)
+```
+
+Each person is marked `compliant`, `non_compliant` with required classes in `missing`, or `unknown` when the policy cannot be evaluated safely against the PPE model. Policies can also evaluate existing results independently. JSON/JSONL adds compliance only when a policy is active; tracked video evaluates each processed frame without history or smoothing. See [compliance documentation](docs/compliance.md).
+
 The generated project contains prepared data, organized best checkpoints, Ultralytics logs, validation metrics, a structured training summary, and `project.json`. If the PPE stage fails, the prepared data, completed person checkpoint, metadata, and failure context remain available. See [docs/training.md](docs/training.md) for the complete contract.
 
 Training orchestration does not guarantee model quality. Results depend on label correctness, class coverage, source diversity, base checkpoints, hyperparameters, hardware, and available training time.
@@ -283,11 +302,12 @@ tests/               Weight-free unit and synthetic integration tests
 - Worker tracking is optional and does not provide biometric re-identification or guaranteed identity persistence.
 - Cross-person duplicate suppression is not performed.
 - Accuracy and latency depend on user-provided checkpoints, data, hardware, thresholds, and scene density.
-- Epoch-level training resume, hyperparameter search, live streams, PPE history/smoothing, deployment exports, and web interfaces are outside the v0.6.0 scope.
+- Epoch-level training resume, policy history/smoothing, alerts, zones, hyperparameter search, live streams, deployment exports, and web interfaces are outside the v0.7.0 scope.
 
 ## Roadmap
 
 - Project inspection and portable training-project bundles
+- Multiple-policy and zone-aware compliance routing
 - Optional cross-person duplicate analysis
 - Video and tracking support
 - Export/runtime adapters after the core API stabilizes

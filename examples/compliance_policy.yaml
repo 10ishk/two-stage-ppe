@@ -1,0 +1,8 @@
+name: construction-default
+required:
+  - hard-hat
+  - vest
+  - boots
+min_confidence: 0.30
+# Set to "error" to fail before inference when a required name is absent from the PPE model.
+unknown_class_behavior: unknown

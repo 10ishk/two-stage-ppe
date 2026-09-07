@@ -2,6 +2,13 @@
 
 All notable changes are documented here.
 
+## 0.7.0
+
+- Add configurable PPE compliance policies with structured observed/missing results.
+- Add YAML/JSON policy loading to image and video CLI workflows.
+- Add optional JSON/JSONL compliance fields, OpenCV compliance labels, and frame-observation totals.
+- Preserve tracking IDs while evaluating compliance independently for every processed frame.
+
 ## 0.6.0
 
 - Add explicit stage-aware training resume and idempotent completed-project reuse.

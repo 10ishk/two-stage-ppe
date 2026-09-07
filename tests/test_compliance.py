@@ -55,6 +55,13 @@ def test_policy_yaml_loading_and_serialization(tmp_path):
     assert json.loads(json.dumps(payload))["persons"][0]["track_id"] == 17
 
 
+def test_malformed_policy_files_fail_clearly(tmp_path):
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("name: [broken", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid compliance policy"):
+        CompliancePolicy.load(broken)
+
+
 class Parent:
     class_names = {0: "person"}
 

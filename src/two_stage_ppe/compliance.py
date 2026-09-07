@@ -87,7 +87,10 @@ class CompliancePolicy:
                     import yaml
                 except ImportError as exc:
                     raise RuntimeError("YAML policies require PyYAML") from exc
-                payload = yaml.safe_load(source.read_text(encoding="utf-8"))
+                try:
+                    payload = yaml.safe_load(source.read_text(encoding="utf-8"))
+                except yaml.YAMLError as exc:
+                    raise ValueError(f"Invalid compliance policy {source}: {exc}") from exc
             else:
                 raise ValueError("Policy file must use .json, .yaml, or .yml")
         except (json.JSONDecodeError, ValueError) as exc:

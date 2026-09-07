@@ -105,6 +105,18 @@ def test_duplicate_and_malformed_bundle_manifest_are_rejected(tmp_path):
         verify_bundle(malformed)
 
 
+def test_symlink_like_archive_entry_is_rejected(tmp_path):
+    bundle = tmp_path / "symlink.zip"
+    with zipfile.ZipFile(bundle, "w") as archive:
+        link = zipfile.ZipInfo("weights/link")
+        link.external_attr = 0o120777 << 16
+        archive.writestr(link, b"target")
+        archive.writestr("project.json", b"{}")
+        archive.writestr("bundle_manifest.json", json.dumps({"schema_version": 1, "files": []}))
+    with pytest.raises(ValueError, match="symlink"):
+        verify_bundle(bundle)
+
+
 def test_bundle_cli_parsing():
     parser = build_parser()
     assert parser.parse_args(["export", "--project", "run", "--output", "out.tsppe.zip"]).command == "export"

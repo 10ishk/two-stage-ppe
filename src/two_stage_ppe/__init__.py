@@ -2,6 +2,7 @@
 
 from .config import PipelineConfig
 from .compliance import CompliancePolicy, ComplianceResult, ComplianceStatus
+from .bundles import BundleInspection, export_project, import_project, inspect_project, verify_bundle
 from .pipeline import PPEPipeline
 from .results import Detection, FrameResult, ImageResult, PersonResult, VideoSummary
 from .tracking import ByteTrackPersonTracker, PersonTracker, TrackerConfig, TrackedPerson
@@ -9,9 +10,14 @@ from .training import ResumePlan, TrainingConfig, TrainingResult, TrainingStage,
 
 __all__ = [
     "Detection",
+    "BundleInspection",
     "CompliancePolicy",
     "ComplianceResult",
     "ComplianceStatus",
+    "export_project",
+    "import_project",
+    "inspect_project",
+    "verify_bundle",
     "FrameResult",
     "ImageResult",
     "PPEPipeline",

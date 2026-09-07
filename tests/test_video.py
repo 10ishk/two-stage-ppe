@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from two_stage_ppe.pipeline import PPEPipeline
+from two_stage_ppe.compliance import CompliancePolicy
 from two_stage_ppe.results import Detection
 from two_stage_ppe.tracking import TrackedPerson
 
@@ -197,6 +198,25 @@ def test_tracking_persists_ids_adds_new_worker_and_preserves_ownership(tmp_path)
     assert records[0]["persons"][1]["ppe"][0]["class_name"] == "vest"
     assert summary.unique_tracks == 3
     assert summary.max_concurrent_tracks == 3
+
+
+def test_video_policy_is_per_frame_and_preserves_track_ids(tmp_path):
+    source = make_video(tmp_path / "input.avi", frames=2)
+    helmet = Detection(0, "helmet", (2, 3, 12, 14), 0.8)
+    vest = Detection(1, "vest", (3, 4, 13, 15), 0.8)
+    pipeline, _, _ = make_pipeline(2, child_batches=[[[helmet, vest]], [[helmet]]])
+    tracker = SequenceTracker([[17], [17]])
+    output = tmp_path / "policy.jsonl"
+    summary = pipeline.predict_video(
+        source, jsonl_path=output, tracking=tracker,
+        compliance_policy=CompliancePolicy("site", ["helmet", "vest"]),
+    )
+    records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert [frame["persons"][0]["track_id"] for frame in records] == [17, 17]
+    assert [frame["persons"][0]["compliance"]["status"] for frame in records] == ["compliant", "non_compliant"]
+    assert summary.compliant_observations == 1
+    assert summary.non_compliant_observations == 1
+    assert summary.unknown_observations == 0
 
 
 def test_tracking_lifecycle_disappearance_and_expiry(tmp_path):

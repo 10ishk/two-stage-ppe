@@ -4,12 +4,13 @@ from two_stage_ppe.cli import build_parser, main
 
 
 def test_cli_parses_detect_options():
-    args = build_parser().parse_args(["detect", "--input", "in", "--output", "out", "--person-model", "p.pt", "--ppe-model", "c.pt", "--person-class", "3", "--ppe-batch-size", "8", "--save-json"])
+    args = build_parser().parse_args(["detect", "--input", "in", "--output", "out", "--person-model", "p.pt", "--ppe-model", "c.pt", "--person-class", "3", "--ppe-batch-size", "8", "--save-json", "--policy", "site.yaml"])
     assert args.command == "detect"
     assert args.person_class == "3"
     assert args.crop_padding == 0.05
     assert args.save_json
     assert args.ppe_batch_size == 8
+    assert args.policy == "site.yaml"
 
 
 @pytest.mark.parametrize("value", ["0", "-3"])
@@ -28,7 +29,7 @@ def test_video_cli_parses_sampling_and_jsonl_options():
         "video", "--input", "input.mp4", "--output", "output.mp4",
         "--person-model", "p.pt", "--ppe-model", "c.pt",
         "--frame-stride", "2", "--start-frame", "3", "--max-frames", "5",
-        "--ppe-batch-size", "8", "--jsonl", "results.jsonl", "--no-render", "--track",
+        "--ppe-batch-size", "8", "--jsonl", "results.jsonl", "--no-render", "--track", "--policy", "site.json",
     ])
     assert args.command == "video"
     assert (args.frame_stride, args.start_frame, args.max_frames) == (2, 3, 5)
@@ -36,6 +37,7 @@ def test_video_cli_parses_sampling_and_jsonl_options():
     assert args.jsonl == "results.jsonl"
     assert args.no_render
     assert args.track
+    assert args.policy == "site.json"
 
 
 @pytest.mark.parametrize(("option", "value"), [("--frame-stride", "0"), ("--start-frame", "-1"), ("--max-frames", "0")])

@@ -19,7 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
-dependencies = ["numpy>=1.23", "opencv-python>=4.8"]
+dependencies = ["numpy>=1.23", "opencv-python>=4.8", "PyYAML>=6.0"]
 
 [project.optional-dependencies]
 yolo = ["ultralytics>=8.3,<9"]

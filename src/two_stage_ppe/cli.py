@@ -83,6 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
     video.add_argument("--track", action="store_true", help="Assign persistent ByteTrack IDs to persons")
     video.add_argument("--policy", help="YAML or JSON compliance policy evaluated per processed frame")
 
+    export = subparsers.add_parser("export", help="Create a portable trained-project bundle")
+    export.add_argument("--project", required=True, help="Completed project.json or its directory")
+    export.add_argument("--output", required=True, help="New .tsppe.zip bundle path")
+    inspect = subparsers.add_parser("inspect", help="Inspect a project manifest or portable bundle")
+    inspect.add_argument("source", help="project.json, project directory, or .tsppe.zip bundle")
+    verify = subparsers.add_parser("verify", help="Verify portable bundle structure and SHA256 hashes")
+    verify.add_argument("bundle", help=".tsppe.zip bundle")
+    importer = subparsers.add_parser("import", help="Verify and safely extract a portable bundle")
+    importer.add_argument("bundle", help=".tsppe.zip bundle")
+    importer.add_argument("--output", required=True, help="New destination project directory")
+
     train = subparsers.add_parser("train", help="Prepare data and train both detector stages")
     train.add_argument("--dataset", required=True, help="Pascal VOC dataset root")
     train.add_argument("--output", required=True, help="New training project directory")
@@ -115,6 +126,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    if args.command in {"export", "inspect", "verify", "import"}:
+        from .bundles import export_project, format_inspection, import_project, inspect_project, verify_bundle
+
+        if args.command == "export":
+            print(export_project(args.project, args.output))
+        elif args.command == "inspect":
+            print(format_inspection(inspect_project(args.source)))
+        elif args.command == "verify":
+            print(format_inspection(verify_bundle(args.bundle)))
+        else:
+            print(import_project(args.bundle, args.output))
+        return 0
     if args.command == "detect":
         from .compliance import CompliancePolicy
 

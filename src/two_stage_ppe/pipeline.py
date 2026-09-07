@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 
 from .config import PipelineConfig
+from .compliance import CompliancePolicy, ComplianceStatus
 from .detectors import Detector, UltralyticsDetector
 from .geometry import clip_box, crop_to_global, expand_box, valid_box
 from .results import Detection, FrameResult, ImageResult, PersonResult, VideoSummary
@@ -105,12 +106,17 @@ class PPEPipeline:
             raise ValueError(f"Person class {selector!r} is not present in the person model")
         return matches[0]
 
-    def predict(self, image: str | Path) -> ImageResult:
+    def _ppe_class_names(self) -> list[str]:
+        return list(self.ppe_detector.class_names.values())
+
+    def predict(self, image: str | Path, *, compliance_policy: CompliancePolicy | None = None) -> ImageResult:
+        if compliance_policy is not None:
+            compliance_policy.validate_classes(self._ppe_class_names())
         source = Path(image)
         frame = cv2.imread(str(source))
         if frame is None:
             raise ValueError(f"Could not read image: {source}")
-        return self._predict_frame(frame, source.name, source.resolve())
+        return self._predict_frame(frame, source.name, source.resolve(), compliance_policy=compliance_policy)
 
     def _predict_frame(
         self,
@@ -118,6 +124,7 @@ class PPEPipeline:
         image_name: str,
         source_path: Path | None = None,
         tracker: PersonTracker | None = None,
+        compliance_policy: CompliancePolicy | None = None,
     ) -> ImageResult:
         """Run the shared image/video-frame detection path."""
         height, width = frame.shape[:2]
@@ -168,11 +175,14 @@ class PPEPipeline:
                         person.ppe.append(
                             Detection(child.class_id, child.class_name, global_box, child.confidence)
                         )
-        return ImageResult(image_name, width, height, people, source_path)
+        result = ImageResult(image_name, width, height, people, source_path)
+        if compliance_policy is not None:
+            compliance_policy.evaluate_image(result, model_classes=self._ppe_class_names())
+        return result
 
 
-    def predict_many(self, source: str | Path) -> list[ImageResult]:
-        return [self.predict(path) for path in image_paths(source)]
+    def predict_many(self, source: str | Path, *, compliance_policy: CompliancePolicy | None = None) -> list[ImageResult]:
+        return [self.predict(path, compliance_policy=compliance_policy) for path in image_paths(source)]
 
     def process(
         self,
@@ -181,10 +191,11 @@ class PPEPipeline:
         *,
         save_images: bool = True,
         save_json: bool = False,
+        compliance_policy: CompliancePolicy | None = None,
     ) -> list[ImageResult]:
         destination = Path(output)
         destination.mkdir(parents=True, exist_ok=True)
-        results = self.predict_many(source)
+        results = self.predict_many(source, compliance_policy=compliance_policy)
         for result in results:
             stem = Path(result.image).stem
             if save_images:
@@ -208,6 +219,7 @@ class PPEPipeline:
         progress_interval: int = 100,
         tracking: bool | PersonTracker = False,
         tracker_config: TrackerConfig | None = None,
+        compliance_policy: CompliancePolicy | None = None,
     ) -> VideoSummary:
         """Stream a video through the existing batched frame pipeline.
 
@@ -227,6 +239,8 @@ class PPEPipeline:
             raise ValueError("max_frames must be a positive integer or None")
         if progress_interval < 1:
             raise ValueError("progress_interval must be at least 1")
+        if compliance_policy is not None:
+            compliance_policy.validate_classes(self._ppe_class_names())
 
         if tracking is True:
             try:
@@ -274,6 +288,7 @@ class PPEPipeline:
         interrupted = False
         observed_track_ids: set[int] = set()
         max_concurrent_tracks = 0
+        compliant_observations = non_compliant_observations = unknown_observations = 0
         started = time.perf_counter()
         try:
             if json_destination is not None:
@@ -296,7 +311,8 @@ class PPEPipeline:
                 output_frame = frame
                 if should_process:
                     image_result = self._predict_frame(
-                        frame, f"frame_{frame_index:06d}", tracker=active_tracker
+                        frame, f"frame_{frame_index:06d}", tracker=active_tracker,
+                        compliance_policy=compliance_policy,
                     )
                     timestamp = frame_index / source_fps if source_fps is not None else None
                     frame_result = FrameResult(
@@ -304,6 +320,10 @@ class PPEPipeline:
                     )
                     total_persons += len(frame_result.persons)
                     total_ppe += sum(len(person.ppe) for person in frame_result.persons)
+                    statuses = [person.compliance.status for person in frame_result.persons if person.compliance]
+                    compliant_observations += statuses.count(ComplianceStatus.COMPLIANT)
+                    non_compliant_observations += statuses.count(ComplianceStatus.NON_COMPLIANT)
+                    unknown_observations += statuses.count(ComplianceStatus.UNKNOWN)
                     current_track_ids = {
                         person.track_id for person in frame_result.persons if person.track_id is not None
                     }
@@ -371,4 +391,7 @@ class PPEPipeline:
             interrupted,
             len(observed_track_ids) if active_tracker is not None else None,
             max_concurrent_tracks if active_tracker is not None else None,
+            compliant_observations if compliance_policy is not None else None,
+            non_compliant_observations if compliance_policy is not None else None,
+            unknown_observations if compliance_policy is not None else None,
         )

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .geometry import BBox
+from .compliance import ComplianceResult, ComplianceStatus
 
 
 def _box_list(box: BBox) -> list[float]:
@@ -37,6 +38,7 @@ class PersonResult:
     confidence: float
     ppe: list[Detection] = field(default_factory=list)
     track_id: int | None = None
+    compliance: ComplianceResult | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -47,6 +49,8 @@ class PersonResult:
         }
         if self.track_id is not None:
             result["track_id"] = self.track_id
+        if self.compliance is not None:
+            result["compliance"] = self.compliance.to_dict()
         return result
 
 
@@ -59,11 +63,22 @@ class ImageResult:
     source_path: Path | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "image": self.image,
             "width": self.width,
             "height": self.height,
             "persons": [person.to_dict() for person in self.persons],
+        }
+        if any(person.compliance is not None for person in self.persons):
+            result["compliance_summary"] = self.compliance_summary()
+        return result
+
+    def compliance_summary(self) -> dict[str, int]:
+        statuses = [person.compliance.status for person in self.persons if person.compliance is not None]
+        return {
+            "compliant_persons": statuses.count(ComplianceStatus.COMPLIANT),
+            "non_compliant_persons": statuses.count(ComplianceStatus.NON_COMPLIANT),
+            "unknown_persons": statuses.count(ComplianceStatus.UNKNOWN),
         }
 
     def save_json(self, path: str | Path) -> Path:
@@ -128,6 +143,9 @@ class VideoSummary:
     interrupted: bool = False
     unique_tracks: int | None = None
     max_concurrent_tracks: int | None = None
+    compliant_observations: int | None = None
+    non_compliant_observations: int | None = None
+    unknown_observations: int | None = None
 
     @property
     def average_processing_fps(self) -> float:
@@ -135,7 +153,7 @@ class VideoSummary:
         return self.processed_frames / self.elapsed_seconds if self.elapsed_seconds > 0 else 0.0
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "input_path": self.input_path,
             "output_path": self.output_path,
             "jsonl_path": self.jsonl_path,
@@ -153,3 +171,10 @@ class VideoSummary:
             "unique_tracks": self.unique_tracks,
             "max_concurrent_tracks": self.max_concurrent_tracks,
         }
+        if self.compliant_observations is not None:
+            result.update({
+                "compliant_observations": self.compliant_observations,
+                "non_compliant_observations": self.non_compliant_observations,
+                "unknown_observations": self.unknown_observations,
+            })
+        return result

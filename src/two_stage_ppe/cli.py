@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_model_options(detect)
     detect.add_argument("--save-json", action="store_true", help="Write one JSON file per image")
     detect.add_argument("--no-images", action="store_true", help="Do not write annotated images")
+    detect.add_argument("--policy", help="YAML or JSON compliance policy")
 
     video = subparsers.add_parser("video", help="Stream detection over a video")
     video.add_argument("--input", required=True, help="Input video")
@@ -80,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     video.add_argument("--no-render", action="store_true", help="Write frames without annotations")
     video.add_argument("--track", action="store_true", help="Assign persistent ByteTrack IDs to persons")
+    video.add_argument("--policy", help="YAML or JSON compliance policy evaluated per processed frame")
 
     train = subparsers.add_parser("train", help="Prepare data and train both detector stages")
     train.add_argument("--dataset", required=True, help="Pascal VOC dataset root")
@@ -114,10 +116,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     if args.command == "detect":
+        from .compliance import CompliancePolicy
+
         if args.no_images and not args.save_json:
             raise SystemExit("Nothing to save: combine --no-images with --save-json")
+        policy = CompliancePolicy.load(args.policy) if args.policy else None
         results = create_pipeline(args).process(
-            args.input, args.output, save_images=not args.no_images, save_json=args.save_json
+            args.input, args.output, save_images=not args.no_images, save_json=args.save_json,
+            compliance_policy=policy,
         )
         logging.info("Processed %d image(s)", len(results))
         return 0
@@ -156,6 +162,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.output is None and args.jsonl is None:
         raise SystemExit("Nothing to save: provide --output, --jsonl, or both")
+    from .compliance import CompliancePolicy
+
+    policy = CompliancePolicy.load(args.policy) if args.policy else None
     summary = create_pipeline(args).predict_video(
         args.input,
         args.output,
@@ -166,6 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_frames=args.max_frames,
         render=not args.no_render,
         tracking=args.track,
+        compliance_policy=policy,
     )
     logging.info(
         "Processed %d video frames in %.2fs (%.2f processed frames/s)",

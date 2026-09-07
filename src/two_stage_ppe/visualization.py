@@ -28,7 +28,15 @@ def render_result(image: np.ndarray, result: "ImageResult") -> np.ndarray:
         x1, y1, x2, y2 = (int(round(value)) for value in person.bbox)
         cv2.rectangle(canvas, (x1, y1), (x2, y2), (255, 128, 0), 2)
         person_label = "person" if person.track_id is None else f"person #{person.track_id}"
-        _draw_label(canvas, f"{person_label} {person.confidence:.2f}", (x1, y1), (255, 128, 0))
+        label = f"{person_label} {person.confidence:.2f}"
+        if person.compliance is not None:
+            if person.compliance.status.value == "compliant":
+                label += " | COMPLIANT"
+            elif person.compliance.status.value == "unknown":
+                label += " | UNKNOWN"
+            else:
+                label += f" | MISSING: {', '.join(person.compliance.missing)}"
+        _draw_label(canvas, label, (x1, y1), (255, 128, 0))
         for detection in person.ppe:
             a, b, c, d = (int(round(value)) for value in detection.bbox)
             color = (40 + (detection.class_id * 67) % 180, 190, 40 + (detection.class_id * 43) % 180)
